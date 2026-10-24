@@ -1471,6 +1471,12 @@ function DeviceListPage() {
     setSearch(searchInput.trim());
   }
 
+  const columns = type === "All"
+    ? ["Asset tag", "Type", "Maker and model", "Details", "Serial number", "Department", "Verification", "View specs"]
+    : type === "PC"
+      ? ["Asset tag", "Maker and model", "RAM", "Motherboard", "Serial number", "Department", "Verification", "View specs"]
+      : ["Asset tag", "Maker and model", "Printer type", "Toner or ink model", "IP address", "Serial number", "Department", "Verification", "View specs"];
+
   return (
     <StaffLayout activePage="Devices">
       <div className="page-heading">
@@ -1486,7 +1492,7 @@ function DeviceListPage() {
             aria-label="Search devices"
             maxLength={120}
             onChange={(event) => setSearchInput(event.target.value)}
-            placeholder="Search asset tag, maker, or model"
+            placeholder="Search asset tag, maker, model, serial number, or IP address"
             value={searchInput}
           />
           <button className="button button-secondary">Search</button>
@@ -1522,25 +1528,36 @@ function DeviceListPage() {
         <table className="accounts-table device-table">
           <thead>
             <tr>
-              <th>Asset tag</th>
-              <th>Type</th>
-              <th>Maker and model</th>
-              <th>RAM</th>
-              <th>Motherboard</th>
-              <th>Serial number</th>
-              <th>Department</th>
-              <th>Verification</th>
-              <th>View specs</th>
+              {columns.map((column) => <th key={column}>{column}</th>)}
             </tr>
           </thead>
           <tbody>
             {devices.map((device) => (
               <tr key={device.id}>
                 <td>{device.assetTag}</td>
-                <td>{device.type}</td>
+                {type === "All" && <td>{device.type}</td>}
                 <td>{[device.brand, device.model].filter(Boolean).join(" ") || "—"}</td>
-                <td>{device.type === "Printer" ? "n/a" : device.ram || "—"}</td>
-                <td>{device.type === "Printer" ? "n/a" : device.motherboard || "—"}</td>
+                {type === "All" && (
+                  <td>
+                    {(device.type === "PC"
+                      ? [device.ram, device.motherboard]
+                      : [device.printerType, device.ipAddress]
+                    ).filter(Boolean).join(" · ") || "—"}
+                  </td>
+                )}
+                {type === "PC" && (
+                  <>
+                    <td>{device.ram || "—"}</td>
+                    <td>{device.motherboard || "—"}</td>
+                  </>
+                )}
+                {type === "Printer" && (
+                  <>
+                    <td>{device.printerType || "—"}</td>
+                    <td>{device.supplyModel || "—"}</td>
+                    <td>{device.ipAddress || "—"}</td>
+                  </>
+                )}
                 <td>{device.serialNo || "—"}</td>
                 <td>{device.department || "—"}</td>
                 <td>
@@ -1552,9 +1569,9 @@ function DeviceListPage() {
               </tr>
             ))}
             {!loading && devices.length === 0 && (
-              <tr><td className="empty-cell" colSpan={9}>No devices match these filters.</td></tr>
+              <tr><td className="empty-cell" colSpan={columns.length}>No devices match these filters.</td></tr>
             )}
-            {loading && <tr><td className="empty-cell" colSpan={9}>Loading devices...</td></tr>}
+            {loading && <tr><td className="empty-cell" colSpan={columns.length}>Loading devices...</td></tr>}
           </tbody>
         </table>
       </div>
@@ -1632,8 +1649,17 @@ function DeviceEditorPage() {
       return;
     }
     setSaving(true);
+    const {
+      printerType,
+      supplyModel,
+      ipAddress,
+      ...deviceFields
+    } = form;
     const payload = {
-      ...form,
+      ...deviceFields,
+      printer_type: printerType,
+      supply_model: supplyModel,
+      ip_address: ipAddress,
       departmentId: form.departmentId,
       assignedUserId: form.assignedUserId || null,
       lastServiced: form.lastServiced || null,

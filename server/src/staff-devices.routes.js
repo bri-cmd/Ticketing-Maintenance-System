@@ -51,9 +51,9 @@ function getDeviceInput(body) {
   const model = optionalText(body.model, 100);
   const ram = type === "PC" ? optionalText(body.ram, 80) : null;
   const motherboard = type === "PC" ? optionalText(body.motherboard, 120) : null;
-  const printerType = type === "Printer" ? body.printerType : null;
-  const supplyModel = type === "Printer" ? optionalText(body.supplyModel, 120) : null;
-  const ipAddress = type === "Printer" ? optionalText(body.ipAddress, 45) : null;
+  const printerType = type === "Printer" ? body.printer_type : null;
+  const supplyModel = type === "Printer" ? optionalText(body.supply_model, 120) : null;
+  const ipAddress = type === "Printer" ? optionalText(body.ip_address, 45) : null;
   const serialNo = optionalText(body.serialNo, 120);
   const location = optionalText(body.location, 150);
   const departmentId = body.departmentId === "" || body.departmentId === null
@@ -515,8 +515,9 @@ router.get("/", async (request, response) => {
     conditions.push(`(
       device.asset_tag LIKE ? OR device.brand LIKE ? OR device.model LIKE ?
       OR device.ram LIKE ? OR device.motherboard LIKE ? OR device.serial_no LIKE ?
+      OR device.ip_address LIKE ?
     )`);
-    values.push(like, like, like, like, like, like);
+    values.push(like, like, like, like, like, like, like);
   }
   const [rows] = await pool.execute(
     `SELECT device.id, device.asset_tag, device.type, device.brand, device.model,
