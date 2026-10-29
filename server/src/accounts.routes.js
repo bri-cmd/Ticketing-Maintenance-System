@@ -245,7 +245,7 @@ async function updateAccountStatus(request, response, accountType) {
     response.status(400).json({ message: "Provide a valid account and an enabled or disabled status." });
     return;
   }
-  if (userId === request.user.id && !active) {
+  if (userId === Number(request.user.id) && !active) {
     response.status(400).json({ message: "You cannot disable your own account." });
     return;
   }

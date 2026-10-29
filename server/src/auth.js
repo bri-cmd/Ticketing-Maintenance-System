@@ -55,7 +55,8 @@ async function requireUser(request, response, next) {
   }
 
   const [rows] = await pool.execute(
-    `SELECT u.id, u.full_name, u.username, u.email, u.avatar_path, u.department_id,
+    `SELECT u.id, u.full_name, u.username, u.email, u.avatar_path,
+            DATE_FORMAT(u.updated_at, '%Y%m%d%H%i%s') AS avatar_version, u.department_id,
             u.role, u.must_change_password, u.onboarding_completed, u.computer_setup,
             u.session_version,
             d.name AS department
@@ -75,6 +76,7 @@ async function requireUser(request, response, next) {
     response.status(401).json({ message: "Your sign-in has expired. Please sign in again." });
     return;
   }
+
   request.user = rows[0];
   next();
 }

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Link,
   Navigate,
@@ -11,6 +12,7 @@ import {
 } from "react-router-dom";
 import { api, jsonBody } from "./api.js";
 import ErrorBoundary from "./ErrorBoundary.jsx";
+import Modal from "./Modal.jsx";
 import { formatNotificationTime } from "./notification-time.js";
 
 const AuthContext = createContext(null);
@@ -557,6 +559,11 @@ function NotificationPanel({
               const actorDepartment = typeof notification?.actorDepartment === "string"
                 ? notification.actorDepartment.trim()
                 : "";
+              const actorMeta = notification?.actorType === "guest"
+                ? `Guest - ${actorName}`
+                : notification?.actorType === "system"
+                  ? "System"
+                  : [actorDepartment, actorName].filter(Boolean).join(" - ") || "System";
               return (
                 <li key={notification?.id ?? `${ticketNo}-${index}`}>
                   <button
@@ -577,8 +584,8 @@ function NotificationPanel({
                         <time dateTime={time.full ? notification.createdAt : undefined} title={time.full || undefined}>
                           {time.relative}
                         </time>
-                        {actorDepartment && <span aria-hidden="true">·</span>}
-                        <span>{[actorDepartment, actorName].filter(Boolean).join(" - ")}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{actorMeta}</span>
                       </span>
                     </span>
                     {!notification?.isRead && <span className="notification-unread-dot" aria-label="Unread" />}
@@ -3429,9 +3436,10 @@ function AccountPage({ type }) {
   const isEmployee = type === "employees";
   const title = isEmployee ? "Employee Accounts" : "IT Accounts";
   const endpoint = isEmployee ? "/api/accounts/employees" : "/api/accounts/it";
+  const accountRoute = isEmployee ? "employees" : "it";
   const [accounts, setAccounts] = useState([]);
   const [departments, setDepartments] = useState(departmentOptionsFallback);
-  const [formOpen, setFormOpen] = useState(isEmployee);
+  const [dialog, setDialog] = useState(null);
   const [editingAccount, setEditingAccount] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [form, setForm] = useState({
@@ -3444,6 +3452,9 @@ function AccountPage({ type }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [copied, setCopied] = useState(false);
+  const emptyForm = { fullName: "", username: "", email: "", departmentId: "", role: "technician" };
 
   async function loadAccounts() {
     const [accountResult, departmentResult] = await Promise.all([
@@ -3458,6 +3469,22 @@ function AccountPage({ type }) {
     loadAccounts().catch((requestError) => setError(requestError.message));
   }, [endpoint]);
 
+  const closeDialog = useCallback(() => {
+    setDialog(null);
+    setEditingAccount(null);
+    setEditForm(null);
+    setError("");
+    setCopied(false);
+  }, []);
+
+  function openCreateDialog() {
+    setForm(emptyForm);
+    setTemporaryPassword("");
+    setError("");
+    setNotice("");
+    setDialog({ kind: "create" });
+  }
+
   function updateForm(field, value) {
     setForm((current) => {
       const next = { ...current, [field]: value };
@@ -3467,6 +3494,17 @@ function AccountPage({ type }) {
       return next;
     });
   }
+
+  const formIsDirty = dialog?.kind === "create"
+    && Object.keys(emptyForm).some((field) => form[field] !== emptyForm[field]);
+  const editIsDirty = dialog?.kind === "edit" && editingAccount && editForm
+    && (
+      editForm.fullName !== editingAccount.fullName
+      || editForm.username !== editingAccount.username
+      || editForm.email !== editingAccount.email
+      || editForm.departmentId !== String(editingAccount.departmentId || "")
+      || (!isEmployee && editForm.role !== editingAccount.role)
+    );
 
   async function createAccount(event) {
     event.preventDefault();
@@ -3484,8 +3522,9 @@ function AccountPage({ type }) {
           ...(isEmployee ? {} : { role: form.role }),
         }),
       });
-      setNotice(`Temporary password for ${result.account.username}: ${result.temporaryPassword}`);
-      setForm({ fullName: "", username: "", email: "", departmentId: "", role: "technician" });
+      setTemporaryPassword(result.temporaryPassword);
+      setDialog({ kind: "created", username: result.account.username });
+      setForm(emptyForm);
       await loadAccounts();
     } catch (requestError) {
       setError(requestError.message);
@@ -3494,34 +3533,52 @@ function AccountPage({ type }) {
     }
   }
 
-  async function resetPassword(account) {
-    if (!window.confirm(`Reset the password for ${account.fullName}?`)) return;
+  function askToResetPassword(account) {
     setError("");
     setNotice("");
+    setDialog({ kind: "confirm", action: "reset", account });
+  }
+
+  function askToChangeStatus(account, active) {
+    setError("");
+    setNotice("");
+    setDialog({ kind: "confirm", action: active ? "enable" : "disable", account, active });
+  }
+
+  async function confirmAccountAction() {
+    if (dialog?.kind !== "confirm") return;
+    const { account, action, active } = dialog;
+    setError("");
+    setNotice("");
+    setBusy(true);
     try {
-      const result = await api(`${endpoint}/${account.id}/reset-password`, { method: "POST" });
-      setNotice(`Temporary password for ${account.username}: ${result.temporaryPassword}`);
-      await loadAccounts();
+      if (action === "reset") {
+        const result = await api(`${endpoint}/${account.id}/reset-password`, { method: "POST" });
+        setTemporaryPassword(result.temporaryPassword);
+        setDialog({ kind: "password-reset", username: account.username });
+        await loadAccounts();
+      } else {
+        const result = await api(`/api/accounts/${accountRoute}/${account.id}/status`, {
+          method: "PATCH",
+          body: jsonBody({ active }),
+        });
+        closeDialog();
+        setNotice(result.message);
+        await loadAccounts();
+      }
     } catch (requestError) {
       setError(requestError.message);
+    } finally {
+      setBusy(false);
     }
   }
 
-  async function setAccountActive(account, active) {
-    const action = active ? "enable" : "disable";
-    if (!window.confirm(`${action[0].toUpperCase()}${action.slice(1)} ${account.fullName}'s account?`)) return;
-    setError("");
-    setNotice("");
+  async function copyTemporaryPassword() {
     try {
-      const route = isEmployee ? "employees" : "it";
-      const result = await api(`/api/accounts/${route}/${account.id}/status`, {
-        method: "PATCH",
-        body: jsonBody({ active }),
-      });
-      setNotice(result.message);
-      await loadAccounts();
+      await navigator.clipboard.writeText(temporaryPassword);
+      setCopied(true);
     } catch (requestError) {
-      setError(requestError.message);
+      setError(`Could not copy the password: ${requestError.message}`);
     }
   }
 
@@ -3536,6 +3593,7 @@ function AccountPage({ type }) {
     });
     setError("");
     setNotice("");
+    setDialog({ kind: "edit" });
   }
 
   async function saveAccount(event) {
@@ -3556,10 +3614,9 @@ function AccountPage({ type }) {
           ...(isEmployee ? {} : { role: editForm.role }),
         }),
       });
+      closeDialog();
       setNotice(result.message);
-      setEditingAccount(null);
-      setEditForm(null);
-      await loadAccounts();
+      loadAccounts().catch((requestError) => setError(requestError.message));
       if (editingAccount.id === user.id) await refreshUser();
     } catch (requestError) {
       setError(requestError.message);
@@ -3579,15 +3636,13 @@ function AccountPage({ type }) {
               : "Only these accounts can open the IT side. Employee accounts are managed on their own page."}
           </p>
         </div>
-        {!isEmployee && (
-          <button className="button button-primary" onClick={() => setFormOpen(!formOpen)}>
-            {formOpen ? "Close" : "+ Add IT Account"}
-          </button>
-        )}
+        <button className="button button-primary" onClick={openCreateDialog} type="button">
+          {isEmployee ? "Create account" : "+ Add IT account"}
+        </button>
       </div>
-      <FormError message={error} />
+      {!dialog && <FormError message={error} />}
       {notice && <div className="notice" role="status">{notice}</div>}
-      <section className={`accounts-grid ${!isEmployee && !formOpen ? "accounts-grid-wide" : ""}`}>
+      <section className="accounts-grid accounts-grid-wide">
         <div className="table-wrap">
           <table className="accounts-table">
             <thead>
@@ -3598,7 +3653,7 @@ function AccountPage({ type }) {
                 {!isEmployee && <th>Role</th>}
                 <th>Status</th>
                 <th>Last sign-in</th>
-                <th>Actions</th>
+                <th className="account-actions-heading">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -3614,14 +3669,13 @@ function AccountPage({ type }) {
                   <td><span className={`status-pill ${account.active ? "status-active" : "status-disabled"}`}>{account.active ? "Active" : "Disabled"}</span></td>
                   <td>{formatDate(account.lastSignIn)}</td>
                   <td className="table-actions">
-                    <button className="text-button" onClick={() => startEditing(account)} type="button">Edit</button>
-                    <button className="text-button" onClick={() => resetPassword(account)}>Reset password</button>
-                    <button
-                      className={`text-button ${account.active ? "danger-link" : ""}`}
-                      onClick={() => setAccountActive(account, !account.active)}
-                    >
-                      {account.active ? "Disable" : "Enable"}
-                    </button>
+                    <AccountRowActions
+                      account={account}
+                      currentUser={user}
+                      onEdit={() => startEditing(account)}
+                      onResetPassword={() => askToResetPassword(account)}
+                      onStatusChange={(active) => askToChangeStatus(account, active)}
+                    />
                   </td>
                 </tr>
               ))}
@@ -3631,112 +3685,255 @@ function AccountPage({ type }) {
             </tbody>
           </table>
         </div>
-        {(isEmployee || formOpen) && (
-          <form className="form-card account-form" onSubmit={createAccount}>
-            <h2>{isEmployee ? "Create employee account" : "Create IT account"}</h2>
-            <TextField label="Full name" value={form.fullName} onChange={(value) => updateForm("fullName", value)} required />
-            <label>
-              Department
-              <select
-                onChange={(event) => updateForm("departmentId", event.target.value)}
+      </section>
+      {dialog && (
+        <Modal
+          closeConfirmation="Discard your unsaved account changes?"
+          isDirty={Boolean(formIsDirty || editIsDirty)}
+          onClose={closeDialog}
+          size={dialog.kind === "confirm" ? "small" : "default"}
+          title={
+            dialog.kind === "create"
+              ? `Create ${isEmployee ? "employee" : "IT"} account`
+              : dialog.kind === "edit"
+                ? `Edit ${isEmployee ? "employee" : "IT"} account`
+                : dialog.kind === "confirm"
+                  ? "Confirm account action"
+                  : dialog.kind === "created"
+                    ? "Account created"
+                    : dialog.kind === "password-reset"
+                      ? "Password reset"
+                      : ""
+          }
+        >
+          {(dialog.kind === "create" || dialog.kind === "edit") && (
+            <form className="account-modal-form" onSubmit={dialog.kind === "create" ? createAccount : saveAccount}>
+              <TextField
+                label="Full name"
+                value={dialog.kind === "create" ? form.fullName : editForm?.fullName || ""}
+                onChange={(value) => {
+                  if (dialog.kind === "create") updateForm("fullName", value);
+                  else setEditForm((current) => ({ ...current, fullName: value }));
+                }}
                 required
-                value={form.departmentId}
-              >
-                <option value="">Choose a department</option>
-                {departments.map((department) => (
-                  <option key={department.id} value={department.id}>{department.name}</option>
-                ))}
-              </select>
-            </label>
-            {!isEmployee && (
+              />
               <label>
-                Role
+                Department
                 <select
-                  onChange={(event) => updateForm("role", event.target.value)}
-                  value={form.role}
+                  onChange={(event) => {
+                    if (dialog.kind === "create") updateForm("departmentId", event.target.value);
+                    else setEditForm((current) => ({ ...current, departmentId: event.target.value }));
+                  }}
+                  required
+                  value={dialog.kind === "create" ? form.departmentId : editForm?.departmentId || ""}
                 >
-                  <option value="technician">IT Staff</option>
-                  <option value="admin">Admin</option>
+                  <option value="">Choose a department</option>
+                  {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
                 </select>
               </label>
-            )}
-            <TextField label="Username" value={form.username} onChange={(value) => updateForm("username", value)} required />
-            <small className="field-hint">Suggested from the full name; you can change it.</small>
-            <TextField label="Email" type="email" value={form.email} onChange={(value) => updateForm("email", value)} required />
-            <p className="field-hint">A temporary password will be generated. The account holder must change it at first sign-in.</p>
-            <button className="button button-primary button-large" disabled={busy}>
-              {busy ? "Creating..." : "Create Account"}
-            </button>
-          </form>
-        )}
-      </section>
-      {editingAccount && editForm && (
-        <form className="form-card account-form account-edit-form" onSubmit={saveAccount}>
-          <div className="account-edit-heading">
-            <h2>Edit {isEmployee ? "employee" : "IT"} account</h2>
-            <button
-              className="text-button"
-              onClick={() => {
-                setEditingAccount(null);
-                setEditForm(null);
-              }}
-              type="button"
-            >
-              Cancel
-            </button>
-          </div>
-          <TextField
-            label="Full name"
-            value={editForm.fullName}
-            onChange={(value) => setEditForm((current) => ({ ...current, fullName: value }))}
-            required
-          />
-          <label>
-            Department
-            <select
-              onChange={(event) => setEditForm((current) => ({ ...current, departmentId: event.target.value }))}
-              required
-              value={editForm.departmentId}
-            >
-              <option value="">Choose a department</option>
-              {departments.map((department) => (
-                <option key={department.id} value={department.id}>{department.name}</option>
-              ))}
-            </select>
-          </label>
-          {!isEmployee && (
-            <label>
-              Role
-              <select
-                onChange={(event) => setEditForm((current) => ({ ...current, role: event.target.value }))}
-                value={editForm.role}
-              >
-                <option value="technician">IT Staff</option>
-                <option value="admin">Admin</option>
-              </select>
-            </label>
+              {!isEmployee && (
+                <label>
+                  Role
+                  <select
+                    onChange={(event) => {
+                      if (dialog.kind === "create") updateForm("role", event.target.value);
+                      else setEditForm((current) => ({ ...current, role: event.target.value }));
+                    }}
+                    value={dialog.kind === "create" ? form.role : editForm?.role || "technician"}
+                  >
+                    <option value="technician">IT Staff</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </label>
+              )}
+              <TextField
+                label="Username"
+                value={dialog.kind === "create" ? form.username : editForm?.username || ""}
+                onChange={(value) => {
+                  if (dialog.kind === "create") updateForm("username", value);
+                  else setEditForm((current) => ({ ...current, username: value }));
+                }}
+                required
+              />
+              {dialog.kind === "create" && <small className="field-hint">Suggested from the full name; you can change it.</small>}
+              <TextField
+                label="Email"
+                type="email"
+                value={dialog.kind === "create" ? form.email : editForm?.email || ""}
+                onChange={(value) => {
+                  if (dialog.kind === "create") updateForm("email", value);
+                  else setEditForm((current) => ({ ...current, email: value }));
+                }}
+                required
+              />
+              {dialog.kind === "create" && (
+                <p className="field-hint">A temporary password will be generated. The account holder must change it at first sign-in.</p>
+              )}
+              <FormError message={error} />
+              <div className="form-actions">
+                <button
+                  className="button button-secondary"
+                  onClick={() => {
+                    if (!(formIsDirty || editIsDirty) || window.confirm("Discard your unsaved account changes?")) closeDialog();
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button className="button button-primary" disabled={busy} type="submit">
+                  {dialog.kind === "create" ? (busy ? "Creating..." : "Create account") : (busy ? "Saving..." : "Save changes")}
+                </button>
+              </div>
+            </form>
           )}
-          <TextField
-            label="Username"
-            value={editForm.username}
-            onChange={(value) => setEditForm((current) => ({ ...current, username: value }))}
-            required
-          />
-          <TextField
-            label="Email"
-            type="email"
-            value={editForm.email}
-            onChange={(value) => setEditForm((current) => ({ ...current, email: value }))}
-            required
-          />
-          <div className="account-edit-actions">
-            <button className="button button-primary" disabled={busy}>
-              {busy ? "Saving..." : "Save changes"}
-            </button>
-          </div>
-        </form>
+          {dialog.kind === "confirm" && (
+            <div className="account-modal-content">
+              <p>
+                {dialog.action === "reset"
+                  ? `Reset password for ${dialog.account.fullName}?`
+                  : `${dialog.action === "enable" ? "Enable" : "Disable"} ${dialog.account.fullName}'s account?`}
+              </p>
+              <FormError message={error} />
+              <div className="form-actions">
+                <button className="account-dialog-button account-dialog-neutral" disabled={busy} onClick={closeDialog} type="button">Cancel</button>
+                <button
+                  className={`account-dialog-button ${dialog.action === "disable" ? "account-dialog-danger" : "account-dialog-primary"}`}
+                  disabled={busy}
+                  onClick={confirmAccountAction}
+                  type="button"
+                >
+                  {busy ? "Please wait..." : dialog.action === "reset" ? "Reset password" : dialog.action === "enable" ? "Enable" : "Disable"}
+                </button>
+              </div>
+            </div>
+          )}
+          {(dialog.kind === "created" || dialog.kind === "password-reset") && (
+            <div className="account-modal-content">
+              <p className="account-password-instruction">The user must change it at first sign-in</p>
+              <label className="account-password-label">
+                Temporary password for {dialog.username}
+                <span className="account-temporary-password">{temporaryPassword}</span>
+              </label>
+              {error && <FormError message={error} />}
+              <div className="form-actions">
+                <button className="button button-secondary" onClick={copyTemporaryPassword} type="button">{copied ? "Copied" : "Copy"}</button>
+                <button className="button button-primary" onClick={closeDialog} type="button">Done</button>
+              </div>
+            </div>
+          )}
+        </Modal>
       )}
     </StaffLayout>
+  );
+}
+
+function AccountRowActions({ account, currentUser, onEdit, onResetPassword, onStatusChange }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, right: 8 });
+  const menuRef = useRef(null);
+  const menuPanelRef = useRef(null);
+  const triggerRef = useRef(null);
+  const ownAdminAccount = currentUser?.role === "admin"
+    && String(account.id) === String(currentUser.id);
+  const statusAction = account.active ? "disable" : "enable";
+  const statusDisabled = statusAction === "disable" && ownAdminAccount;
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const positionMenu = () => {
+      const bounds = triggerRef.current?.getBoundingClientRect();
+      if (!bounds) return;
+      const menuHeight = 128;
+      setMenuPosition({
+        top: bounds.bottom + menuHeight <= window.innerHeight - 8
+          ? bounds.bottom + 4
+          : Math.max(8, bounds.top - menuHeight - 4),
+        right: Math.max(8, window.innerWidth - bounds.right),
+      });
+    };
+    const handlePointerDown = (event) => {
+      if (!menuRef.current?.contains(event.target) && !menuPanelRef.current?.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    positionMenu();
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [menuOpen]);
+
+  function runAndClose(action) {
+    action();
+    setMenuOpen(false);
+  }
+
+  const statusButton = (
+    <button
+      className={`account-action-button ${statusAction === "disable" ? "account-action-disable" : "account-action-enable"}`}
+      disabled={statusDisabled}
+      onClick={() => {
+        if (!statusDisabled) onStatusChange(statusAction === "enable");
+      }}
+      title={statusDisabled ? "You cannot disable your own account" : undefined}
+      type="button"
+    >
+      {statusAction === "disable" ? "Disable" : "Enable"}
+    </button>
+  );
+
+  return (
+    <div className="account-row-actions" ref={menuRef}>
+      <div className="account-row-actions-desktop">
+        <button className="account-action-button account-action-edit" onClick={onEdit} type="button">Edit</button>
+        <button className="account-action-button account-action-reset" onClick={onResetPassword} type="button">Reset password</button>
+        {statusDisabled
+          ? <span className="account-action-disabled" title="You cannot disable your own account">{statusButton}</span>
+          : statusButton}
+      </div>
+      <button
+        aria-expanded={menuOpen}
+        aria-haspopup="menu"
+        aria-label={`Actions for ${account.fullName}`}
+        className="account-row-actions-trigger"
+        onClick={() => setMenuOpen((open) => !open)}
+        ref={triggerRef}
+        type="button"
+      >
+        ...
+      </button>
+      {menuOpen && (
+        createPortal(
+          <div className="account-row-actions-menu" ref={menuPanelRef} role="menu" style={menuPosition}>
+            <button className="account-action-button account-action-edit" onClick={() => runAndClose(onEdit)} role="menuitem" type="button">Edit</button>
+            <button className="account-action-button account-action-reset" onClick={() => runAndClose(onResetPassword)} role="menuitem" type="button">Reset password</button>
+            {statusDisabled
+              ? <span className="account-action-disabled" title="You cannot disable your own account">{statusButton}</span>
+              : <button
+                className={`account-action-button ${statusAction === "disable" ? "account-action-disable" : "account-action-enable"}`}
+                onClick={() => runAndClose(() => onStatusChange(statusAction === "enable"))}
+                role="menuitem"
+                type="button"
+              >
+                {statusAction === "disable" ? "Disable" : "Enable"}
+              </button>}
+          </div>,
+          document.body,
+        )
+      )}
+    </div>
   );
 }
 

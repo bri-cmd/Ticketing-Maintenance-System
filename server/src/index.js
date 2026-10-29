@@ -27,6 +27,7 @@ app.use("/uploads/avatars", express.static(avatarDirectory, {
   index: false,
   maxAge: "1y",
   setHeaders(response) {
+    response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     response.setHeader("X-Content-Type-Options", "nosniff");
   },
 }));

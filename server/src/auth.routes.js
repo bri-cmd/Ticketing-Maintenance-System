@@ -2,6 +2,7 @@ const bcrypt = require("bcryptjs");
 const express = require("express");
 const fs = require("node:fs/promises");
 const { pool } = require("./db");
+const { versionedAvatarPath } = require("./avatar-url");
 const { handleAvatarUpload, removeAvatar, saveAvatar } = require("./avatar-upload");
 const {
   clearSessionCookie,
@@ -22,7 +23,7 @@ function publicUser(user) {
     departmentId: user.department_id,
     department: user.department,
     role: user.role,
-    avatarPath: user.avatar_path,
+    avatarPath: versionedAvatarPath(user.avatar_path, user.avatar_version),
     mustChangePassword: Boolean(user.must_change_password),
     onboardingCompleted: Boolean(user.onboarding_completed),
     computerSetup: user.computer_setup,
@@ -43,7 +44,8 @@ router.post("/login", async (request, response) => {
   }
 
   const [rows] = await pool.execute(
-    `SELECT u.id, u.full_name, u.username, u.email, u.avatar_path, u.department_id,
+    `SELECT u.id, u.full_name, u.username, u.email, u.avatar_path,
+            DATE_FORMAT(u.updated_at, '%Y%m%d%H%i%s') AS avatar_version, u.department_id,
             u.role, u.password_hash, u.must_change_password, u.session_version,
             u.onboarding_completed, u.computer_setup, d.name AS department
      FROM users u
@@ -90,7 +92,19 @@ router.post("/avatar", requireUser, handleAvatarUpload, async (request, response
     } catch (error) {
       console.error(`Unable to remove previous profile photo: ${error.message}`);
     }
-    response.json({ message: "Profile photo updated.", avatarPath: savedAvatar.avatarPath });
+    const [updatedUsers] = await pool.execute(
+      `SELECT avatar_path, DATE_FORMAT(updated_at, '%Y%m%d%H%i%s') AS avatar_version
+       FROM users WHERE id = ?`,
+      [request.user.id],
+    );
+    if (!updatedUsers.length) {
+      response.status(404).json({ message: "Account not found." });
+      return;
+    }
+    response.json({
+      message: "Profile photo updated.",
+      avatarPath: versionedAvatarPath(updatedUsers[0].avatar_path, updatedUsers[0].avatar_version),
+    });
   } catch (error) {
     if (savedAvatar && !persisted) {
       await fs.unlink(savedAvatar.diskPath).catch((cleanupError) => {
