@@ -139,7 +139,7 @@ Defender Firewall only on the trusted company LAN/private network.
 
 ## Dashboard and reports
 
-Technicians and admins can open **Dashboard** for current ticket and
+IT staff and admins can open **Dashboard** for current ticket and
 maintenance metrics and **Reports** for month- and department-filtered ticket
 reports. Reports show received and resolved ticket counts, average resolution
 time, tickets by department and help topic, and the current on-schedule device
@@ -157,6 +157,16 @@ restricted MySQL option file, not on the command line. The temporary file is
 removed after the dump completes or fails. Backups contain service desk data;
 restrict access to the server and its backup directory and copy backups to an
 approved protected location if required by company policy.
+
+Signed-in users can upload a JPG, PNG, or WebP profile photo up to 2 MB. Photos
+are stored under `server/uploads/avatars/` with generated filenames; the folder
+is excluded from Git.
+
+Admins can edit employee and IT account names, usernames, email addresses, and
+departments from the account pages. IT account roles can also be changed
+between **IT Staff** and **Admin**. The notification bell shows new signed-in
+employee tickets for IT accounts and ticket status, assignment, or requester-
+visible message updates for the employee who submitted the ticket.
 
 ### Restore a backup
 

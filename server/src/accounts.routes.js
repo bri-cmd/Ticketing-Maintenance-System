@@ -32,7 +32,7 @@ function accountValidation(body, includeRole) {
     return { message: "Choose a department." };
   }
   if (includeRole && !allowedItRoles.has(role)) {
-    return { message: "IT accounts must be an admin or technician." };
+    return { message: "IT accounts must be an admin or IT staff member." };
   }
   return { fullName, username, email, departmentId, role };
 }
@@ -114,6 +114,94 @@ async function addAccount(request, response, role) {
       departmentId: account.departmentId,
     },
     temporaryPassword,
+  });
+}
+
+async function updateAccount(request, response, accountType, isItAccount = false) {
+  const userId = Number(request.params.id);
+  if (!Number.isInteger(userId) || userId < 1) {
+    response.status(400).json({ message: "Invalid account ID." });
+    return;
+  }
+  const account = accountValidation(request.body, isItAccount);
+  if (account.message) {
+    response.status(400).json({ message: account.message });
+    return;
+  }
+  const [departments] = await pool.execute(
+    "SELECT id FROM departments WHERE id = ?",
+    [account.departmentId],
+  );
+  if (!departments.length) {
+    response.status(400).json({ message: "Choose an existing department." });
+    return;
+  }
+
+  const [accounts] = await pool.execute(
+    `SELECT id, role, active FROM users WHERE id = ? AND ${accountType}`,
+    [userId],
+  );
+  if (!accounts.length) {
+    response.status(404).json({ message: "Account not found." });
+    return;
+  }
+  const current = accounts[0];
+  const nextRole = isItAccount ? account.role : "employee";
+  if (userId === request.user.id && nextRole !== current.role) {
+    response.status(400).json({ message: "You cannot change your own IT role." });
+    return;
+  }
+  if (current.active && current.role === "admin" && nextRole !== "admin") {
+    const [admins] = await pool.execute(
+      "SELECT COUNT(*) AS active_admins FROM users WHERE role = 'admin' AND active = TRUE",
+    );
+    if (admins[0].active_admins <= 1) {
+      response.status(400).json({ message: "The last active admin account cannot be changed to another role." });
+      return;
+    }
+  }
+
+  try {
+    await pool.execute(
+      `UPDATE users
+       SET full_name = ?, username = ?, email = ?, department_id = ?, role = ?,
+           session_version = session_version + ?
+       WHERE id = ?`,
+      [
+        account.fullName,
+        account.username,
+        account.email,
+        account.departmentId,
+        nextRole,
+        nextRole === current.role ? 0 : 1,
+        userId,
+      ],
+    );
+  } catch (error) {
+    if (handleDuplicate(error, response)) return;
+    throw error;
+  }
+  const [updatedRows] = await pool.execute(
+    `SELECT u.id, u.full_name, u.username, u.email, u.role, u.active,
+            u.department_id, d.name AS department
+     FROM users u
+     LEFT JOIN departments d ON d.id = u.department_id
+     WHERE u.id = ?`,
+    [userId],
+  );
+  const updated = updatedRows[0];
+  response.json({
+    message: "Account updated.",
+    account: {
+      id: updated.id,
+      fullName: updated.full_name,
+      username: updated.username,
+      email: updated.email,
+      role: updated.role,
+      active: Boolean(updated.active),
+      departmentId: updated.department_id,
+      department: updated.department,
+    },
   });
 }
 
@@ -203,6 +291,10 @@ router.post("/employees", (request, response, next) => {
   addAccount(request, response, "employee").catch(next);
 });
 
+router.patch("/employees/:id", (request, response, next) => {
+  updateAccount(request, response, "role = 'employee'").catch(next);
+});
+
 router.post("/employees/:id/reset-password", (request, response, next) => {
   resetPassword(request, response, "role = 'employee'").catch(next);
 });
@@ -217,6 +309,10 @@ router.get("/it", async (_request, response) => {
 
 router.post("/it", (request, response, next) => {
   addAccount(request, response, "it").catch(next);
+});
+
+router.patch("/it/:id", (request, response, next) => {
+  updateAccount(request, response, "role IN ('technician', 'admin')", true).catch(next);
 });
 
 router.post("/it/:id/reset-password", (request, response, next) => {

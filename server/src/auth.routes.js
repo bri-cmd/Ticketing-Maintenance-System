@@ -1,6 +1,8 @@
 const bcrypt = require("bcryptjs");
 const express = require("express");
+const fs = require("node:fs/promises");
 const { pool } = require("./db");
+const { handleAvatarUpload, removeAvatar, saveAvatar } = require("./avatar-upload");
 const {
   clearSessionCookie,
   requirePasswordChangeComplete,
@@ -20,6 +22,7 @@ function publicUser(user) {
     departmentId: user.department_id,
     department: user.department,
     role: user.role,
+    avatarPath: user.avatar_path,
     mustChangePassword: Boolean(user.must_change_password),
     onboardingCompleted: Boolean(user.onboarding_completed),
     computerSetup: user.computer_setup,
@@ -40,7 +43,7 @@ router.post("/login", async (request, response) => {
   }
 
   const [rows] = await pool.execute(
-    `SELECT u.id, u.full_name, u.username, u.email, u.department_id,
+    `SELECT u.id, u.full_name, u.username, u.email, u.avatar_path, u.department_id,
             u.role, u.password_hash, u.must_change_password, u.session_version,
             u.onboarding_completed, u.computer_setup, d.name AS department
      FROM users u
@@ -65,6 +68,41 @@ router.post("/logout", (_request, response) => {
 
 router.get("/me", requireUser, (request, response) => {
   response.json({ user: publicUser(request.user) });
+});
+
+router.post("/avatar", requireUser, handleAvatarUpload, async (request, response, next) => {
+  let savedAvatar;
+  let persisted = false;
+  try {
+    savedAvatar = await saveAvatar(request.file);
+    const [result] = await pool.execute(
+      "UPDATE users SET avatar_path = ? WHERE id = ? AND active = TRUE",
+      [savedAvatar.avatarPath, request.user.id],
+    );
+    if (!result.affectedRows) {
+      await fs.unlink(savedAvatar.diskPath);
+      response.status(404).json({ message: "Account not found." });
+      return;
+    }
+    persisted = true;
+    try {
+      await removeAvatar(request.user.avatar_path);
+    } catch (error) {
+      console.error(`Unable to remove previous profile photo: ${error.message}`);
+    }
+    response.json({ message: "Profile photo updated.", avatarPath: savedAvatar.avatarPath });
+  } catch (error) {
+    if (savedAvatar && !persisted) {
+      await fs.unlink(savedAvatar.diskPath).catch((cleanupError) => {
+        if (cleanupError.code !== "ENOENT") throw cleanupError;
+      });
+    }
+    if (error.statusCode) {
+      response.status(error.statusCode).json({ message: error.message });
+      return;
+    }
+    next(error);
+  }
 });
 
 router.post("/change-password", requireUser, async (request, response) => {

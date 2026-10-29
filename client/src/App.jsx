@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   Link,
   Navigate,
@@ -10,6 +10,8 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { api, jsonBody } from "./api.js";
+import ErrorBoundary from "./ErrorBoundary.jsx";
+import { formatNotificationTime } from "./notification-time.js";
 
 const AuthContext = createContext(null);
 const departmentOptionsFallback = [];
@@ -80,17 +82,7 @@ function Brand({ compact = false }) {
 }
 
 function Header() {
-  const { user, signOut } = useAuth();
-  const navigate = useNavigate();
-
-  async function handleSignOut() {
-    try {
-      await signOut();
-      navigate("/");
-    } catch (error) {
-      window.alert(error.message);
-    }
-  }
+  const { user } = useAuth();
 
   return (
     <header className="public-header">
@@ -98,18 +90,511 @@ function Header() {
         <Brand />
       </Link>
       {user ? (
-        <span className="account-link">
-          {user.fullName} |{" "}
-          <button type="button" className="text-link" onClick={handleSignOut}>
-            Sign out
-          </button>
-        </span>
+        <ErrorBoundary message="Profile tools could not be displayed.">
+          <ProfileMenu />
+        </ErrorBoundary>
       ) : (
         <span className="account-link">
           Guest User | <Link to="/login">Sign in</Link>
         </span>
       )}
     </header>
+  );
+}
+
+function Avatar({ user, className = "" }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const avatarPath = typeof user?.avatarPath === "string" ? user.avatarPath : "";
+  useEffect(() => setImageFailed(false), [avatarPath]);
+  return (
+    <span className={`profile-avatar ${className}`} aria-hidden="true">
+      {avatarPath && !imageFailed ? (
+        <img src={avatarPath} alt="" onError={() => setImageFailed(true)} />
+      ) : (
+        <svg viewBox="0 0 40 40" focusable="false">
+          <circle cx="20" cy="20" r="19" fill="#fff" stroke="currentColor" strokeWidth="2" />
+          <circle cx="20" cy="14" r="6" fill="currentColor" />
+          <path d="M8 33c1.7-6.1 6-9.2 12-9.2s10.3 3.1 12 9.2" fill="currentColor" />
+        </svg>
+      )}
+    </span>
+  );
+}
+
+function ProfileMenu() {
+  const { user, setUser, signOut } = useAuth();
+  const navigate = useNavigate();
+  const menuRef = useRef(null);
+  const triggerRef = useRef(null);
+  const notificationTriggerRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notificationTab, setNotificationTab] = useState("unread");
+  const [hasMoreNotifications, setHasMoreNotifications] = useState(false);
+  const [loadingMoreNotifications, setLoadingMoreNotifications] = useState(false);
+  const [notificationsLoading, setNotificationsLoading] = useState(true);
+  const [notificationActionsOpen, setNotificationActionsOpen] = useState(false);
+  const [notificationPanelPosition, setNotificationPanelPosition] = useState(null);
+  const [unavailableNotificationMessage, setUnavailableNotificationMessage] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  const [notificationError, setNotificationError] = useState("");
+
+  const refreshNotifications = useCallback(async () => {
+    setNotificationsLoading(true);
+    try {
+      const limit = notificationTab === "all" ? 10 : 50;
+      const result = await api(
+        `/api/notifications?unread=${notificationTab === "unread"}&limit=${limit}&offset=0`,
+      );
+      setNotifications(Array.isArray(result.notifications) ? result.notifications : []);
+      setUnreadCount(Number.isFinite(Number(result.unreadCount)) ? Number(result.unreadCount) : 0);
+      setHasMoreNotifications(result.hasMore === true);
+      setNotificationError("");
+    } catch (requestError) {
+      setNotificationError("Could not load notifications. Try again.");
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }, [notificationTab]);
+
+  useEffect(() => {
+    if (user.mustChangePassword) return undefined;
+    refreshNotifications();
+    const intervalId = window.setInterval(refreshNotifications, 30000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [user.mustChangePassword, refreshNotifications]);
+
+  useEffect(() => {
+    if (!open && !notificationsOpen) return undefined;
+    function handlePointerDown(event) {
+      if (!menuRef.current?.contains(event.target)) {
+        setOpen(false);
+        setNotificationsOpen(false);
+        setNotificationActionsOpen(false);
+      }
+    }
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        setOpen(false);
+        setNotificationsOpen(false);
+        setNotificationActionsOpen(false);
+        (notificationsOpen ? notificationTriggerRef : triggerRef).current?.focus();
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open, notificationsOpen]);
+
+  async function changePhoto(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError("");
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      setError("Choose a JPG, PNG, or WebP image.");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setError("Profile photos must be 2 MB or smaller.");
+      return;
+    }
+    const body = new FormData();
+    body.append("avatar", file);
+    setUploading(true);
+    try {
+      const result = await api("/api/auth/avatar", { method: "POST", body });
+      setUser((current) => ({ ...current, avatarPath: result.avatarPath }));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleSignOut() {
+    setError("");
+    try {
+      await signOut();
+      navigate("/");
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }
+
+  async function openNotification(notification) {
+    setUnavailableNotificationMessage("");
+    try {
+      const notificationId = Number(notification?.id);
+      const canMarkRead = Number.isSafeInteger(notificationId) && notificationId > 0;
+      if (!notification?.isRead && canMarkRead) {
+        await api(`/api/notifications/${notificationId}/read`, { method: "PATCH" });
+        setNotifications((current) => current.map((item) => (
+          item?.id === notificationId ? { ...item, isRead: true } : item
+        )).filter((item) => notificationTab !== "unread" || item?.id !== notificationId));
+        setUnreadCount((current) => Math.max(0, current - 1));
+      }
+      setNotificationsOpen(false);
+      if (typeof notification?.ticketNo !== "string" || !notification.ticketNo.trim()) {
+        setUnavailableNotificationMessage("This ticket is no longer available.");
+        setNotificationsOpen(true);
+        return;
+      }
+      navigate(user.role === "employee"
+        ? `/employee/requests/${encodeURIComponent(notification.ticketNo)}`
+        : `/staff/tickets/${encodeURIComponent(notification.ticketNo)}`);
+    } catch (requestError) {
+      setNotificationError("Could not load notifications. Try again.");
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    try {
+      await api("/api/notifications/read-all", { method: "PATCH" });
+      if (notificationTab === "unread") {
+        setNotifications([]);
+        setHasMoreNotifications(false);
+      } else {
+        setNotifications((current) => current.map((item) => ({ ...item, isRead: true })));
+      }
+      setUnreadCount(0);
+      setNotificationActionsOpen(false);
+      setNotificationError("");
+    } catch (requestError) {
+      setNotificationError("Could not load notifications. Try again.");
+    }
+  }
+
+  async function clearReadNotifications() {
+    try {
+      await api("/api/notifications/read", { method: "DELETE" });
+      setNotificationActionsOpen(false);
+      await refreshNotifications();
+    } catch (requestError) {
+      setNotificationError("Could not load notifications. Try again.");
+    }
+  }
+
+  async function loadMoreNotifications() {
+    setLoadingMoreNotifications(true);
+    setNotificationError("");
+    try {
+      const result = await api(
+        `/api/notifications?unread=false&limit=10&offset=${notifications.length}`,
+      );
+      const page = Array.isArray(result.notifications) ? result.notifications : [];
+      setNotifications((current) => [...current, ...page]);
+      setHasMoreNotifications(result.hasMore === true);
+    } catch (requestError) {
+      setNotificationError("Could not load notifications. Try again.");
+    } finally {
+      setLoadingMoreNotifications(false);
+    }
+  }
+
+  function selectNotificationTab(tab) {
+    if (tab === notificationTab) return;
+    setNotificationTab(tab);
+    setNotifications([]);
+    setHasMoreNotifications(false);
+    setNotificationError("");
+  }
+
+  function handleNotificationTabKeyDown(event) {
+    const tabs = Array.from(event.currentTarget.parentElement.querySelectorAll('[role="tab"]'));
+    const currentIndex = tabs.indexOf(event.currentTarget);
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % tabs.length;
+    if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = tabs.length - 1;
+    if (nextIndex !== currentIndex) {
+      event.preventDefault();
+      tabs[nextIndex].focus();
+      selectNotificationTab(nextIndex === 0 ? "unread" : "all");
+    }
+  }
+
+  function toggleNotifications() {
+    setOpen(false);
+    if (notificationsOpen) {
+      setNotificationActionsOpen(false);
+    } else {
+      const bounds = notificationTriggerRef.current?.getBoundingClientRect();
+      if (bounds) {
+        const panelWidth = Math.min(460, window.innerWidth - 24);
+        setNotificationPanelPosition({
+          top: Math.round(bounds.bottom + 8),
+          right: Math.max(
+            12,
+            Math.min(
+              Math.round(window.innerWidth - bounds.right),
+              Math.round(window.innerWidth - panelWidth - 12),
+            ),
+          ),
+        });
+      }
+      refreshNotifications();
+    }
+    setNotificationsOpen((current) => !current);
+  }
+
+  const roleLabel = user.role === "admin" ? "Admin"
+    : user.role === "technician" ? "IT Staff" : "Employee";
+  return (
+    <div className="profile-menu" ref={menuRef}>
+      <button
+        aria-controls="notification-panel"
+        aria-expanded={notificationsOpen}
+        aria-label={unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"}
+        className="notification-button"
+        onClick={toggleNotifications}
+        ref={notificationTriggerRef}
+        type="button"
+        title="Notifications"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
+        </svg>
+        {unreadCount > 0 && <span className="notification-count">{unreadCount > 99 ? "99+" : unreadCount}</span>}
+      </button>
+      <button
+        className="profile-trigger"
+        type="button"
+        aria-expanded={open}
+        onClick={() => {
+          setError("");
+          setNotificationsOpen(false);
+          setNotificationActionsOpen(false);
+          setOpen((current) => !current);
+        }}
+        ref={triggerRef}
+      >
+        <Avatar user={user} />
+        <span className="profile-trigger-name">{user.fullName}</span>
+        <span className={`profile-role-badge role-${user.role}`}>{roleLabel}</span>
+        <svg className="profile-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <path d="m3 6 5 5 5-5" />
+        </svg>
+      </button>
+      {open && (
+        <section className="profile-dropdown" aria-label="Profile menu">
+          <div className="profile-dropdown-heading">
+            <Avatar user={user} className="profile-dropdown-avatar" />
+            <div className="profile-dropdown-identity">
+              <strong>{user.fullName}</strong>
+              <span>@{user.username}</span>
+              <span>{user.department || "No department"}</span>
+              <span>{user.email}</span>
+            </div>
+          </div>
+          {error && <p className="profile-menu-error" role="alert">{error}</p>}
+          <input
+            accept="image/jpeg,image/png,image/webp"
+            className="visually-hidden"
+            onChange={changePhoto}
+            ref={fileInputRef}
+            type="file"
+          />
+          <button
+            className="profile-menu-action"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+            type="button"
+          >
+            {uploading ? "Uploading photo..." : "Change photo"}
+          </button>
+          <Link className="profile-menu-action" onClick={() => setOpen(false)} to="/change-password">
+            Change password
+          </Link>
+          <button className="profile-menu-action profile-menu-signout" onClick={handleSignOut} type="button">
+            Sign out
+          </button>
+        </section>
+      )}
+      {notificationsOpen && (
+        <ErrorBoundary message="Notifications could not be displayed.">
+          <NotificationPanel
+            clearReadNotifications={clearReadNotifications}
+            error={notificationError}
+            hasMore={hasMoreNotifications}
+            loading={notificationsLoading}
+            loadingMore={loadingMoreNotifications}
+            markAllRead={markAllNotificationsRead}
+            moreOpen={notificationActionsOpen}
+            notifications={notifications}
+            onItemClick={openNotification}
+            onLoadMore={loadMoreNotifications}
+            onMoreToggle={() => setNotificationActionsOpen((current) => !current)}
+            onRetry={refreshNotifications}
+            onTabKeyDown={handleNotificationTabKeyDown}
+            onTabSelect={selectNotificationTab}
+            position={notificationPanelPosition}
+            tab={notificationTab}
+            unavailableMessage={unavailableNotificationMessage}
+            unreadCount={unreadCount}
+          />
+        </ErrorBoundary>
+      )}
+    </div>
+  );
+}
+
+function NotificationPanel({
+  clearReadNotifications,
+  error,
+  hasMore,
+  loading,
+  loadingMore,
+  markAllRead,
+  moreOpen,
+  notifications,
+  onItemClick,
+  onLoadMore,
+  onMoreToggle,
+  onRetry,
+  onTabKeyDown,
+  onTabSelect,
+  position,
+  tab,
+  unavailableMessage,
+  unreadCount,
+}) {
+  const style = position
+    ? { top: `${position.top}px`, right: `${position.right}px` }
+    : undefined;
+  return (
+    <section
+      className="notification-panel"
+      id="notification-panel"
+      aria-label="Notifications"
+      style={style}
+    >
+      <div className="notification-panel-heading">
+        <strong>Notification</strong>
+        <div className="notification-panel-actions">
+          <button
+            className="notification-mark-read-link"
+            disabled={unreadCount === 0}
+            onClick={markAllRead}
+            type="button"
+          >
+            Mark all as read
+          </button>
+          <div className="notification-more-wrap">
+            <button
+              aria-expanded={moreOpen}
+              aria-label="More notification actions"
+              className="notification-more-button"
+              onClick={onMoreToggle}
+              type="button"
+            >
+              <span aria-hidden="true">···</span>
+            </button>
+            {moreOpen && (
+              <div className="notification-more-menu" role="group" aria-label="More notification actions">
+                <button disabled={unreadCount === 0} onClick={markAllRead} type="button">
+                  Mark all as read
+                </button>
+                <button onClick={clearReadNotifications} type="button">
+                  Clear read notifications
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="notification-tabs" role="tablist" aria-label="Notification filter">
+        <button
+          aria-selected={tab === "unread"}
+          className={tab === "unread" ? "notification-tab-active" : ""}
+          onClick={() => onTabSelect("unread")}
+          onKeyDown={onTabKeyDown}
+          role="tab"
+          type="button"
+        >
+          Unread ({unreadCount})
+        </button>
+        <button
+          aria-selected={tab === "all"}
+          className={tab === "all" ? "notification-tab-active" : ""}
+          onClick={() => onTabSelect("all")}
+          onKeyDown={onTabKeyDown}
+          role="tab"
+          type="button"
+        >
+          All
+        </button>
+      </div>
+      {unavailableMessage && <p className="profile-menu-error" role="alert">{unavailableMessage}</p>}
+      {error ? (
+        <div className="notification-load-error" role="alert">
+          <p>Could not load notifications. Try again.</p>
+          <button className="notification-retry-button" onClick={onRetry} type="button">Retry</button>
+        </div>
+      ) : loading && notifications.length === 0 ? (
+        <p className="notification-empty">Loading notifications...</p>
+      ) : notifications.length === 0 ? (
+        <p className="notification-empty">No notifications</p>
+      ) : (
+        <>
+          <ul className="notification-list">
+            {notifications.map((notification, index) => {
+              const time = formatNotificationTime(notification?.createdAt);
+              const ticketNo = typeof notification?.ticketNo === "string" ? notification.ticketNo : "";
+              const actorName = typeof notification?.actorName === "string" && notification.actorName.trim()
+                ? notification.actorName
+                : "System";
+              const actorDepartment = typeof notification?.actorDepartment === "string"
+                ? notification.actorDepartment.trim()
+                : "";
+              return (
+                <li key={notification?.id ?? `${ticketNo}-${index}`}>
+                  <button
+                    className={`notification-item ${notification?.isRead ? "" : "notification-unread"}`}
+                    onClick={() => onItemClick(notification || {})}
+                    type="button"
+                  >
+                    <Avatar
+                      className="notification-avatar"
+                      user={{ avatarPath: notification?.actorAvatarPath }}
+                    />
+                    <span className="notification-item-content">
+                      <strong>{notification?.title || "Notification"}</strong>
+                      <span className="notification-item-message">
+                        {notification?.message || ticketNo || "Ticket details unavailable"}
+                      </span>
+                      <span className="notification-item-meta">
+                        <time dateTime={time.full ? notification.createdAt : undefined} title={time.full || undefined}>
+                          {time.relative}
+                        </time>
+                        {actorDepartment && <span aria-hidden="true">·</span>}
+                        <span>{[actorDepartment, actorName].filter(Boolean).join(" - ")}</span>
+                      </span>
+                    </span>
+                    {!notification?.isRead && <span className="notification-unread-dot" aria-label="Unread" />}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {tab === "all" && hasMore && (
+            <button className="notification-load-more" disabled={loadingMore} onClick={onLoadMore} type="button">
+              {loadingMore ? "Loading..." : "Load more"}
+            </button>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -755,7 +1240,7 @@ function TicketStatusCard({ ticket }) {
       </div>
       <TicketProgress ticket={ticket} />
       <dl className="ticket-meta">
-        <div><dt>Technician</dt><dd>{ticket.technician}</dd></div>
+        <div><dt>IT staff</dt><dd>{ticket.technician}</dd></div>
         <div><dt>Last update</dt><dd>{ticket.lastUpdateAt ? formatDate(ticket.lastUpdateAt) : "Just submitted"}</dd></div>
       </dl>
       <p className="ticket-last-update">{ticket.lastUpdate}</p>
@@ -1014,8 +1499,7 @@ function LoadingPage() {
 }
 
 function StaffLayout({ children, activePage }) {
-  const { user, signOut } = useAuth();
-  const navigate = useNavigate();
+  const { user } = useAuth();
   const location = useLocation();
   const navigation = [
     { label: "Dashboard", href: "/staff", active: activePage === "Dashboard" },
@@ -1048,15 +1532,6 @@ function StaffLayout({ children, activePage }) {
         }]
       : []),
   ];
-
-  async function handleSignOut() {
-    try {
-      await signOut();
-      navigate("/");
-    } catch (error) {
-      window.alert(error.message);
-    }
-  }
 
   return (
     <div className="staff-layout">
@@ -1095,13 +1570,15 @@ function StaffLayout({ children, activePage }) {
             </div>
           ))}
         </nav>
-        <div className="sidebar-user">
-          <strong>{user.fullName}</strong>
-          <span>{user.role === "admin" ? "Admin" : "Technician"}</span>
-          <button className="text-button" onClick={handleSignOut}>Sign out</button>
-        </div>
       </aside>
-      <main className="staff-content">{children}</main>
+      <main className="staff-main">
+        <div className="staff-topbar">
+          <ErrorBoundary message="Profile tools could not be displayed.">
+            <ProfileMenu />
+          </ErrorBoundary>
+        </div>
+        <div className="staff-content">{children}</div>
+      </main>
     </div>
   );
 }
@@ -2724,7 +3201,7 @@ function MaintenancePlanEditorPage() {
             </label>
           </div>
           <fieldset className="maintenance-checklist-field">
-            <legend>Checklist: what the technician checks</legend>
+            <legend>Checklist: what IT staff checks</legend>
             {form.checklist.map((item, index) => (
               <div className="maintenance-checklist-row" key={index}>
                 <input
@@ -2931,9 +3408,9 @@ function WalkInTicketPage() {
           </select>
         </label>
         <label>
-          Assign to technician
+          Assign to IT staff
           <select onChange={(event) => setAssignedTo(event.target.value)} required value={assignedTo}>
-            <option value="">Choose a technician</option>
+            <option value="">Choose IT staff</option>
             {technicians.map((technician) => <option key={technician.id} value={technician.id}>{technician.fullName}</option>)}
           </select>
         </label>
@@ -2948,12 +3425,15 @@ function WalkInTicketPage() {
 }
 
 function AccountPage({ type }) {
+  const { user, refreshUser } = useAuth();
   const isEmployee = type === "employees";
   const title = isEmployee ? "Employee Accounts" : "IT Accounts";
   const endpoint = isEmployee ? "/api/accounts/employees" : "/api/accounts/it";
   const [accounts, setAccounts] = useState([]);
   const [departments, setDepartments] = useState(departmentOptionsFallback);
   const [formOpen, setFormOpen] = useState(isEmployee);
+  const [editingAccount, setEditingAccount] = useState(null);
+  const [editForm, setEditForm] = useState(null);
   const [form, setForm] = useState({
     fullName: "",
     username: "",
@@ -3045,6 +3525,49 @@ function AccountPage({ type }) {
     }
   }
 
+  function startEditing(account) {
+    setEditingAccount(account);
+    setEditForm({
+      fullName: account.fullName,
+      username: account.username,
+      email: account.email,
+      departmentId: String(account.departmentId || ""),
+      role: account.role,
+    });
+    setError("");
+    setNotice("");
+  }
+
+  async function saveAccount(event) {
+    event.preventDefault();
+    if (!editingAccount || !editForm) return;
+    setError("");
+    setNotice("");
+    setBusy(true);
+    try {
+      const route = isEmployee ? "employees" : "it";
+      const result = await api(`/api/accounts/${route}/${editingAccount.id}`, {
+        method: "PATCH",
+        body: jsonBody({
+          fullName: editForm.fullName,
+          username: editForm.username,
+          email: editForm.email,
+          departmentId: Number(editForm.departmentId),
+          ...(isEmployee ? {} : { role: editForm.role }),
+        }),
+      });
+      setNotice(result.message);
+      setEditingAccount(null);
+      setEditForm(null);
+      await loadAccounts();
+      if (editingAccount.id === user.id) await refreshUser();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <StaffLayout activePage={title}>
       <div className="page-heading">
@@ -3087,10 +3610,11 @@ function AccountPage({ type }) {
                   </td>
                   <td>{account.username}</td>
                   {isEmployee && <td>{account.department || "—"}</td>}
-                  {!isEmployee && <td><span className={`role-pill role-${account.role}`}>{account.role}</span></td>}
+                  {!isEmployee && <td><span className={`role-pill role-${account.role}`}>{accountRoleLabel(account.role)}</span></td>}
                   <td><span className={`status-pill ${account.active ? "status-active" : "status-disabled"}`}>{account.active ? "Active" : "Disabled"}</span></td>
                   <td>{formatDate(account.lastSignIn)}</td>
                   <td className="table-actions">
+                    <button className="text-button" onClick={() => startEditing(account)} type="button">Edit</button>
                     <button className="text-button" onClick={() => resetPassword(account)}>Reset password</button>
                     <button
                       className={`text-button ${account.active ? "danger-link" : ""}`}
@@ -3131,7 +3655,7 @@ function AccountPage({ type }) {
                   onChange={(event) => updateForm("role", event.target.value)}
                   value={form.role}
                 >
-                  <option value="technician">Technician</option>
+                  <option value="technician">IT Staff</option>
                   <option value="admin">Admin</option>
                 </select>
               </label>
@@ -3146,8 +3670,80 @@ function AccountPage({ type }) {
           </form>
         )}
       </section>
+      {editingAccount && editForm && (
+        <form className="form-card account-form account-edit-form" onSubmit={saveAccount}>
+          <div className="account-edit-heading">
+            <h2>Edit {isEmployee ? "employee" : "IT"} account</h2>
+            <button
+              className="text-button"
+              onClick={() => {
+                setEditingAccount(null);
+                setEditForm(null);
+              }}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+          <TextField
+            label="Full name"
+            value={editForm.fullName}
+            onChange={(value) => setEditForm((current) => ({ ...current, fullName: value }))}
+            required
+          />
+          <label>
+            Department
+            <select
+              onChange={(event) => setEditForm((current) => ({ ...current, departmentId: event.target.value }))}
+              required
+              value={editForm.departmentId}
+            >
+              <option value="">Choose a department</option>
+              {departments.map((department) => (
+                <option key={department.id} value={department.id}>{department.name}</option>
+              ))}
+            </select>
+          </label>
+          {!isEmployee && (
+            <label>
+              Role
+              <select
+                onChange={(event) => setEditForm((current) => ({ ...current, role: event.target.value }))}
+                value={editForm.role}
+              >
+                <option value="technician">IT Staff</option>
+                <option value="admin">Admin</option>
+              </select>
+            </label>
+          )}
+          <TextField
+            label="Username"
+            value={editForm.username}
+            onChange={(value) => setEditForm((current) => ({ ...current, username: value }))}
+            required
+          />
+          <TextField
+            label="Email"
+            type="email"
+            value={editForm.email}
+            onChange={(value) => setEditForm((current) => ({ ...current, email: value }))}
+            required
+          />
+          <div className="account-edit-actions">
+            <button className="button button-primary" disabled={busy}>
+              {busy ? "Saving..." : "Save changes"}
+            </button>
+          </div>
+        </form>
+      )}
     </StaffLayout>
   );
+}
+
+function accountRoleLabel(role) {
+  if (role === "admin") return "Admin";
+  if (role === "technician") return "IT Staff";
+  return "Employee";
 }
 
 function suggestedUsername(fullName) {

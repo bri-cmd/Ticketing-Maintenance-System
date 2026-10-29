@@ -4,6 +4,7 @@ server/.env
 server/.env.*
 !server/.env.example
 server/backups/
+server/uploads/
 npm-debug.log*
 .env
 .env.*

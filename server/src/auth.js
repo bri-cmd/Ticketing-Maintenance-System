@@ -55,7 +55,7 @@ async function requireUser(request, response, next) {
   }
 
   const [rows] = await pool.execute(
-    `SELECT u.id, u.full_name, u.username, u.email, u.department_id,
+    `SELECT u.id, u.full_name, u.username, u.email, u.avatar_path, u.department_id,
             u.role, u.must_change_password, u.onboarding_completed, u.computer_setup,
             u.session_version,
             d.name AS department

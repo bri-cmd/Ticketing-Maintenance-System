@@ -249,7 +249,7 @@ router.patch("/:ticketNo", async (request, response) => {
     return;
   }
   if (assignedTo !== null && (!Number.isInteger(assignedTo) || assignedTo < 1)) {
-    response.status(400).json({ message: "Choose a valid technician or leave the ticket unassigned." });
+    response.status(400).json({ message: "Choose valid IT staff or leave the ticket unassigned." });
     return;
   }
 
@@ -257,7 +257,7 @@ router.patch("/:ticketNo", async (request, response) => {
   try {
     await connection.beginTransaction();
     const [tickets] = await connection.execute(
-      "SELECT id, status, assigned_to FROM tickets WHERE ticket_no = ? FOR UPDATE",
+      "SELECT id, ticket_no, requester_user_id, status, assigned_to FROM tickets WHERE ticket_no = ? FOR UPDATE",
       [ticketNo],
     );
     if (!tickets.length) {
@@ -272,7 +272,7 @@ router.patch("/:ticketNo", async (request, response) => {
       );
       if (!assignees.length) {
         await connection.rollback();
-        response.status(400).json({ message: "Choose an active technician or admin." });
+        response.status(400).json({ message: "Choose active IT staff or an admin." });
         return;
       }
     }
@@ -336,6 +336,27 @@ router.patch("/:ticketNo", async (request, response) => {
           (ticket_id, user_id, note, visible_to_requester)
          VALUES (?, ?, ?, ?)`,
         [current.id, request.user.id, note, visibleToRequester],
+      );
+    }
+    if (current.requester_user_id !== null
+      && (statusChanged || assignmentChanged || (note && visibleToRequester))) {
+      const requesterMessages = [];
+      if (statusChanged) requesterMessages.push(`Status is now ${status}.`);
+      if (assignmentChanged) {
+        requesterMessages.push(assignedTo === null
+          ? "The ticket is no longer assigned."
+          : "The ticket has been assigned to IT staff.");
+      }
+      if (note && visibleToRequester) requesterMessages.push("IT added a message.");
+      await connection.execute(
+        `INSERT INTO notifications (user_id, ticket_id, actor_user_id, title, message)
+         VALUES (?, ?, ?, 'Ticket updated', ?)`,
+        [
+          current.requester_user_id,
+          current.id,
+          request.user.id,
+          `${current.ticket_no}: ${requesterMessages.join(" ")}`,
+        ],
       );
     }
     await connection.commit();
@@ -429,7 +450,7 @@ router.post("/walk-in", async (request, response) => {
   }
   if (!Number.isInteger(deviceId) || deviceId < 1
     || !Number.isInteger(assignedTo) || assignedTo < 1) {
-    response.status(400).json({ message: "Choose a device and a technician." });
+    response.status(400).json({ message: "Choose a device and IT staff member." });
     return;
   }
   if (!helpTopic || helpTopic.length > 100 || !summary || summary.length > 200
@@ -471,7 +492,7 @@ router.post("/walk-in", async (request, response) => {
     );
     if (!devices.length || !technicians.length) {
       await connection.rollback();
-      response.status(400).json({ message: "Choose an active device and technician." });
+      response.status(400).json({ message: "Choose an active device and IT staff member." });
       return;
     }
     if (departmentId === null) departmentId = devices[0].department_id;

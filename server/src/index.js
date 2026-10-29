@@ -5,12 +5,14 @@ const { pool, testConnection } = require("./db");
 const { getJwtSecret } = require("./auth");
 const authRoutes = require("./auth.routes");
 const accountRoutes = require("./accounts.routes");
+const notificationRoutes = require("./notifications.routes");
 const ticketRoutes = require("./tickets.routes");
 const staffTicketRoutes = require("./staff-tickets.routes");
 const staffDeviceRoutes = require("./staff-devices.routes");
 const staffAnalyticsRoutes = require("./staff-analytics.routes");
 const maintenancePlanRoutes = require("./maintenance-plans.routes");
 const { checkMysqldump, scheduleDailyBackup } = require("./backup");
+const avatarDirectory = path.resolve(__dirname, "../uploads/avatars");
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -18,11 +20,22 @@ const clientBuildPath = path.resolve(__dirname, "../../client/dist");
 
 app.use(express.json());
 app.use(cookieParser());
+app.use("/uploads/avatars", express.static(avatarDirectory, {
+  dotfiles: "deny",
+  fallthrough: false,
+  immutable: true,
+  index: false,
+  maxAge: "1y",
+  setHeaders(response) {
+    response.setHeader("X-Content-Type-Options", "nosniff");
+  },
+}));
 app.get("/api/health", (_request, response) => {
   response.json({ status: "ok" });
 });
 app.use("/api/auth", authRoutes);
 app.use("/api/accounts", accountRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/staff/tickets", staffTicketRoutes);
 app.use("/api/staff/devices", staffDeviceRoutes);

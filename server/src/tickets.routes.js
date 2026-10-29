@@ -135,6 +135,15 @@ async function createTicket(ticketData) {
        VALUES (?, ?, 'Open', TRUE)`,
       [insertResult.insertId, "Your request has been submitted."],
     );
+    if (ticketData.source === "Signed in" && ticketData.requesterUserId) {
+      await connection.execute(
+        `INSERT INTO notifications (user_id, ticket_id, actor_user_id, title, message)
+         SELECT id, ?, ?, 'Submitted Ticket', ?
+          FROM users
+          WHERE role IN ('technician', 'admin') AND active = TRUE`,
+        [insertResult.insertId, ticketData.requesterUserId, `${ticketNo}: ${ticketData.summary}`],
+      );
+    }
     await connection.commit();
     return ticketNo;
   } catch (error) {

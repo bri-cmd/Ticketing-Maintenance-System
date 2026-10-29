@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name VARCHAR(150) NOT NULL,
   username VARCHAR(80) NOT NULL,
   email VARCHAR(254) NOT NULL,
+  avatar_path VARCHAR(255) NULL,
   department_id INT UNSIGNED NULL,
   role ENUM('employee', 'technician', 'admin') NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
@@ -149,5 +150,26 @@ CREATE TABLE IF NOT EXISTS ticket_updates (
   CONSTRAINT fk_ticket_updates_ticket FOREIGN KEY (ticket_id)
     REFERENCES tickets (id) ON UPDATE CASCADE ON DELETE CASCADE,
   CONSTRAINT fk_ticket_updates_user FOREIGN KEY (user_id)
+    REFERENCES users (id) ON UPDATE CASCADE ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id INT UNSIGNED NOT NULL,
+  ticket_id INT UNSIGNED NOT NULL,
+  actor_user_id INT UNSIGNED NULL,
+  title VARCHAR(150) NOT NULL,
+  message VARCHAR(500) NOT NULL,
+  is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_notifications_user_read_date (user_id, is_read, created_at),
+  KEY idx_notifications_ticket (ticket_id),
+  KEY idx_notifications_actor (actor_user_id),
+  CONSTRAINT fk_notifications_user FOREIGN KEY (user_id)
+    REFERENCES users (id) ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_notifications_ticket FOREIGN KEY (ticket_id)
+    REFERENCES tickets (id) ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_notifications_actor FOREIGN KEY (actor_user_id)
     REFERENCES users (id) ON UPDATE CASCADE ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
