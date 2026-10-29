@@ -8,7 +8,9 @@ const accountRoutes = require("./accounts.routes");
 const ticketRoutes = require("./tickets.routes");
 const staffTicketRoutes = require("./staff-tickets.routes");
 const staffDeviceRoutes = require("./staff-devices.routes");
+const staffAnalyticsRoutes = require("./staff-analytics.routes");
 const maintenancePlanRoutes = require("./maintenance-plans.routes");
+const { checkMysqldump, scheduleDailyBackup } = require("./backup");
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -25,6 +27,7 @@ app.use("/api/tickets", ticketRoutes);
 app.use("/api/staff/tickets", staffTicketRoutes);
 app.use("/api/staff/devices", staffDeviceRoutes);
 app.use("/api/staff/maintenance-plans", maintenancePlanRoutes);
+app.use("/api/staff", staffAnalyticsRoutes);
 app.use("/api", (_request, response) => {
   response.status(404).json({ message: "API route not found." });
 });
@@ -51,6 +54,13 @@ async function start() {
     getJwtSecret();
     await testConnection();
     console.log("MySQL connection successful.");
+    const backupTool = await checkMysqldump();
+    if (backupTool.available) {
+      scheduleDailyBackup();
+      console.log("Daily MySQL backup scheduled for 2:00 AM.");
+    } else {
+      console.error(`Automatic MySQL backups are unavailable: ${backupTool.message}`);
+    }
     app.listen(port, "0.0.0.0", () => {
       console.log(`BMC IT Service Desk listening on http://0.0.0.0:${port}`);
     });

@@ -1016,18 +1016,36 @@ function LoadingPage() {
 function StaffLayout({ children, activePage }) {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
-  const links = [
-    { label: "Dashboard", href: "/staff", group: "" },
-    { label: "Ticket queue", href: "/staff/tickets", group: "Tickets" },
-    { label: "Devices", href: "/staff/devices", group: "Devices" },
-    { label: "Maintenance plans", href: "/staff/maintenance-plans", group: "Maintenance" },
-    { label: "Maintenance schedule", href: "/staff/maintenance-schedule", group: "Maintenance" },
-    { label: "Reports", group: "Admin" },
+  const location = useLocation();
+  const navigation = [
+    { label: "Dashboard", href: "/staff", active: activePage === "Dashboard" },
+    {
+      label: "Ticket queue",
+      active: activePage === "Ticket queue",
+      children: [
+        { label: "Ticket queue", href: "/staff/tickets", active: !location.pathname.includes("/walk-in") },
+        { label: "New walk-in ticket", href: "/staff/tickets/walk-in", active: location.pathname.includes("/walk-in") },
+      ],
+    },
+    {
+      label: "Devices",
+      active: activePage === "Devices" || activePage === "Maintenance plans",
+      children: [
+        { label: "Devices", href: "/staff/devices", active: activePage === "Devices" },
+        { label: "Maintenance plans", href: "/staff/maintenance-plans", active: activePage === "Maintenance plans" },
+      ],
+    },
+    { label: "Maintenance schedule", href: "/staff/maintenance-schedule", active: activePage === "Maintenance schedule" },
+    { label: "Reports", href: "/staff/reports", active: activePage === "Reports" },
     ...(user.role === "admin"
-      ? [
-          { label: "Employee accounts", href: "/staff/accounts/employees", group: "Admin" },
-          { label: "IT accounts", href: "/staff/accounts/it", group: "Admin" },
-        ]
+      ? [{
+          label: "Accounts",
+          active: activePage === "Employee Accounts" || activePage === "IT Accounts",
+          children: [
+            { label: "Employee accounts", href: "/staff/accounts/employees", active: activePage === "Employee Accounts" },
+            { label: "IT accounts", href: "/staff/accounts/it", active: activePage === "IT Accounts" },
+          ],
+        }]
       : []),
   ];
 
@@ -1047,18 +1065,32 @@ function StaffLayout({ children, activePage }) {
           <Brand compact />
         </Link>
         <nav aria-label="IT staff navigation">
-          {links.map((item) => (
-            <div key={item.label}>
-              {item.group && <p className="sidebar-group">{item.group}</p>}
+          {navigation.map((item) => (
+            <div className="sidebar-nav-item" key={item.label}>
               {item.href ? (
                 <Link
-                  className={`sidebar-link ${activePage === item.label ? "is-active" : ""}`}
+                  className={`sidebar-link ${item.active ? "is-active" : ""}`}
                   to={item.href}
                 >
                   {item.label}
                 </Link>
               ) : (
-                <span className="sidebar-link sidebar-link-disabled">{item.label}</span>
+                <details className="sidebar-dropdown" defaultOpen={item.active}>
+                  <summary className={`sidebar-link ${item.active ? "is-active" : ""}`}>
+                    {item.label}<span className="sidebar-dropdown-chevron" aria-hidden="true">⌄</span>
+                  </summary>
+                  <div className="sidebar-submenu">
+                    {item.children.map((child) => (
+                      <Link
+                        className={`sidebar-submenu-link ${child.active ? "is-active" : ""}`}
+                        key={child.href}
+                        to={child.href}
+                      >
+                        {child.label}
+                      </Link>
+                    ))}
+                  </div>
+                </details>
               )}
             </div>
           ))}
@@ -1075,19 +1107,256 @@ function StaffLayout({ children, activePage }) {
 }
 
 function StaffHome() {
-  const { user } = useAuth();
+  const [dashboard, setDashboard] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api("/api/staff/dashboard")
+      .then(setDashboard)
+      .catch((requestError) => setError(requestError.message))
+      .finally(() => setLoading(false));
+  }, []);
+
   return (
     <StaffLayout activePage="Dashboard">
-      <h1>Dashboard</h1>
-      <p className="muted">Welcome, {user.fullName}.</p>
-      <div className="staff-welcome-card">
-        <h2>{user.role === "admin" ? "Administrator" : "Technician"} account</h2>
-        <p>
-          {user.role === "admin"
-            ? "Manage employee and IT accounts from the Admin section."
-            : "Account management is available to admins only."}
-        </p>
+      <div className="page-heading dashboard-heading">
+        <div>
+          <h1>Dashboard</h1>
+          <p className="muted">Current ticket and maintenance overview.</p>
+        </div>
       </div>
+      <FormError message={error} />
+      {loading ? <p className="muted">Loading dashboard...</p> : dashboard && (
+        <>
+          <div className="dashboard-metrics">
+            <MetricCard label="Open tickets" value={dashboard.metrics.openTickets} />
+            <MetricCard label="Resolved this week" value={dashboard.metrics.resolvedThisWeek} />
+            <MetricCard label="Overdue maintenance" value={dashboard.metrics.overdueMaintenance} tone="danger" />
+            <MetricCard label="Maintenance due this week" value={dashboard.metrics.maintenanceDueThisWeek} />
+            <MetricCard label="Devices on schedule" value={`${dashboard.metrics.onSchedulePercent}%`} tone="success" />
+          </div>
+          <div className="dashboard-panels">
+            <section className="dashboard-panel">
+              <div className="dashboard-panel-heading">
+                <h2>Recent tickets</h2>
+                <Link to="/staff/tickets">View queue</Link>
+              </div>
+              {dashboard.recentTickets.length ? (
+                <ul className="dashboard-list">
+                  {dashboard.recentTickets.map((ticket) => (
+                    <li key={ticket.ticketNo}>
+                      <div>
+                        <Link className="dashboard-list-title" to={`/staff/tickets/${ticket.ticketNo}`}>
+                          {ticket.ticketNo} · {ticket.summary}
+                        </Link>
+                        <span className="dashboard-list-meta">
+                          {[ticket.department, ticket.source, ticket.requesterName].filter(Boolean).join(" · ")}
+                        </span>
+                      </div>
+                      <span className={`staff-status-badge status-${ticket.status.toLowerCase().replace(/\s+/g, "-")}`}>
+                        {ticket.status}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="muted">No tickets have been submitted yet.</p>}
+            </section>
+            <section className="dashboard-panel">
+              <div className="dashboard-panel-heading">
+                <h2>Maintenance needing attention</h2>
+                <Link to="/staff/maintenance-schedule">View schedule</Link>
+              </div>
+              {dashboard.maintenanceAttention.length ? (
+                <ul className="dashboard-list">
+                  {dashboard.maintenanceAttention.map((device) => (
+                    <li key={device.id}>
+                      <div>
+                        <Link className="dashboard-list-title" to={`/staff/devices/${device.id}`}>
+                          {device.assetTag} · {device.department || device.type}
+                        </Link>
+                        <span className="dashboard-list-meta">
+                          {device.planName || `${device.intervalValue || ""} ${device.intervalUnit || ""}`.trim()}
+                          {device.lastServiced ? ` · Last serviced ${device.lastServiced}` : ""}
+                        </span>
+                      </div>
+                      <span className={`maintenance-status status-${device.status.toLowerCase().replace(/\s+/g, "-")}`}>
+                        {device.status === "Overdue"
+                          ? `Overdue ${Math.abs(device.daysToDue)} day${Math.abs(device.daysToDue) === 1 ? "" : "s"}`
+                          : device.daysToDue === 0 ? "Due today"
+                            : device.daysToDue === 1 ? "Due tomorrow"
+                              : `Due in ${device.daysToDue} days`}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="muted">No overdue or due-soon maintenance.</p>}
+            </section>
+          </div>
+        </>
+      )}
+    </StaffLayout>
+  );
+}
+
+function MetricCard({ label, value, tone = "" }) {
+  return (
+    <section className={`dashboard-metric ${tone ? `is-${tone}` : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </section>
+  );
+}
+
+function formatResolutionMinutes(minutes) {
+  if (minutes === null || minutes === undefined) return "No resolved tickets";
+  const total = Math.round(minutes);
+  const hours = Math.floor(total / 60);
+  const remainingMinutes = total % 60;
+  if (!hours) return `${remainingMinutes} min`;
+  if (!remainingMinutes) return `${hours} hr`;
+  return `${hours} hr ${remainingMinutes} min`;
+}
+
+function ReportBarList({ title, items, emptyMessage }) {
+  const max = Math.max(1, ...items.map((item) => item.count));
+  return (
+    <section className="report-chart-card">
+      <h2>{title}</h2>
+      {items.length ? (
+        <ul className="report-bar-list">
+          {items.map((item) => (
+            <li key={item.name}>
+              <span className="report-bar-label">{item.name}</span>
+              <span
+                className="report-bar-track"
+                role="meter"
+                aria-label={`${item.name}: ${item.count}`}
+                aria-valuemin="0"
+                aria-valuemax={max}
+                aria-valuenow={item.count}
+              >
+                <span className="report-bar" style={{ width: `${Math.max(2, (item.count / max) * 100)}%` }} />
+              </span>
+              <strong>{item.count}</strong>
+            </li>
+          ))}
+        </ul>
+      ) : <p className="muted">{emptyMessage}</p>}
+    </section>
+  );
+}
+
+function ReportsPage() {
+  const { user } = useAuth();
+  const now = new Date();
+  const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
+  const [departmentId, setDepartmentId] = useState("All");
+  const [departments, setDepartments] = useState([]);
+  const [report, setReport] = useState(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [backingUp, setBackingUp] = useState(false);
+
+  useEffect(() => {
+    api("/api/staff/reports/lookups")
+      .then(({ departments: values }) => setDepartments(values))
+      .catch((requestError) => setError(requestError.message));
+  }, []);
+
+  useEffect(() => {
+    const query = new URLSearchParams({ month });
+    if (departmentId !== "All") query.set("departmentId", departmentId);
+    setLoading(true);
+    api(`/api/staff/reports?${query}`)
+      .then((result) => {
+        setReport(result);
+        setError("");
+      })
+      .catch((requestError) => setError(requestError.message))
+      .finally(() => setLoading(false));
+  }, [month, departmentId]);
+
+  const exportQuery = new URLSearchParams({ month });
+  if (departmentId !== "All") exportQuery.set("departmentId", departmentId);
+
+  async function createBackup() {
+    setBackingUp(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api("/api/staff/backup", { method: "POST" });
+      setNotice(`${result.message} Saved as server/backups/${result.filename} (${(result.size / 1024 / 1024).toFixed(2)} MB).`);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBackingUp(false);
+    }
+  }
+
+  return (
+    <StaffLayout activePage="Reports">
+      <div className="page-heading reports-heading">
+        <div>
+          <h1>Reports</h1>
+          <p className="muted">Ticket and maintenance activity for a selected month.</p>
+        </div>
+        <div className="reports-actions">
+          {user.role === "admin" && (
+            <>
+              <a className="button button-outline" href={`/api/staff/reports/tickets.csv?${exportQuery}`}>
+                Export tickets (CSV)
+              </a>
+              <a className="button button-outline" href={`/api/staff/reports/maintenance.csv?${exportQuery}`}>
+                Export maintenance (CSV)
+              </a>
+              <button className="button button-primary" disabled={backingUp} onClick={createBackup} type="button">
+                {backingUp ? "Backing up..." : "Back up now"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="reports-filters">
+        <label>
+          Period
+          <input type="month" onChange={(event) => setMonth(event.target.value)} value={month} />
+        </label>
+        <label>
+          Department
+          <select onChange={(event) => setDepartmentId(event.target.value)} value={departmentId}>
+            <option value="All">All departments</option>
+            {departments.map((department) => (
+              <option key={department.id} value={department.id}>{department.name}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <FormError message={error} />
+      {notice && <div className="notice" role="status">{notice}</div>}
+      {loading ? <p className="muted">Loading report...</p> : report && (
+        <>
+          <div className="reports-metrics">
+            <MetricCard label="Tickets received" value={report.summary.ticketsReceived} />
+            <MetricCard label="Tickets resolved" value={report.summary.ticketsResolved} />
+            <MetricCard label="Average time to resolve" value={formatResolutionMinutes(report.summary.averageResolutionMinutes)} />
+            <MetricCard label="Devices on schedule" value={`${report.summary.onSchedulePercent}%`} tone="success" />
+          </div>
+          <div className="reports-chart-grid">
+            <ReportBarList
+              title="Tickets by department"
+              items={report.byDepartment}
+              emptyMessage="No tickets were received in this period."
+            />
+            <ReportBarList
+              title="Tickets by help topic"
+              items={report.byHelpTopic}
+              emptyMessage="No tickets were received in this period."
+            />
+          </div>
+        </>
+      )}
     </StaffLayout>
   );
 }
@@ -2019,7 +2288,7 @@ function MaintenanceSchedulePage() {
           <h1>Maintenance schedule</h1>
           <p className="muted">Each active device shows its last check, next due date, and maintenance interval.</p>
         </div>
-        <Link className="button button-secondary" to="/staff/maintenance-plans">Manage plans</Link>
+        <Link className="button button-primary" to="/staff/maintenance-plans">Manage plans</Link>
       </div>
       <div className="maintenance-legend" aria-label="Maintenance status legend">
         <span><strong className="maintenance-status status-overdue">Overdue</strong> past the due date</span>
@@ -2939,6 +3208,10 @@ function App() {
         <Route
           path="/staff"
           element={<AuthGate roles={["technician", "admin"]}><StaffHome /></AuthGate>}
+        />
+        <Route
+          path="/staff/reports"
+          element={<AuthGate roles={["technician", "admin"]}><ReportsPage /></AuthGate>}
         />
         <Route
           path="/staff/tickets"

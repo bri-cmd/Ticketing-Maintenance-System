@@ -23,6 +23,7 @@ Build an internal IT service desk web app for "Brilliant Metal Craft and Machine
 - ticket_updates: ticket, user, note, old/new status, visible_to_requester (bool), created_at
 
 ## RULES
+- Every database change is a new, sequentially numbered `.sql` file in `database/migrations/`; apply it with `npm run db:migrate`. Never ask the user to run migration SQL manually or as root.
 - Saving a device automatically attaches its type's plan: next_due = last_serviced (if given) or today, plus the plan interval. No manual "add to schedule" step.
 - Record checkup: sets last_serviced = today, next_due = today + interval, clears any postponement, and saves a maintenance_log. A repair ticket does NOT change maintenance dates.
 - Postpone: moves next_due to a chosen date with a reason; last_serviced stays unchanged. Status badges: Overdue, Due soon (within 7 days), Postponed, On schedule.

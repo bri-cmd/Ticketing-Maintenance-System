@@ -10,6 +10,7 @@
     "build": "npm run build --workspace client",
     "start": "npm run start --workspace server",
     "db:test": "npm run db:test --workspace server",
-    "db:seed": "npm run db:seed --workspace server"
+    "db:seed": "npm run db:seed --workspace server",
+    "db:migrate": "node server/src/migrate.js"
   }
 }
