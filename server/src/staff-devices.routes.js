@@ -147,10 +147,11 @@ function validDate(value) {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
-async function validateDepartment(connection, departmentId) {
+async function validateDepartment(connection, departmentId, allowExistingInactive = false) {
   const [rows] = await connection.execute(
-    "SELECT id FROM departments WHERE id = ?",
-    [departmentId],
+    `SELECT id FROM departments
+     WHERE id = ? AND (active = TRUE OR ? = TRUE)`,
+    [departmentId, allowExistingInactive],
   );
   return rows.length > 0;
 }
@@ -174,7 +175,7 @@ function sendDeviceError(response, error) {
 
 router.get("/lookups", async (_request, response) => {
   const [[departments], [employees], [plans]] = await Promise.all([
-    pool.execute("SELECT id, name FROM departments ORDER BY name"),
+    pool.execute("SELECT id, name FROM departments WHERE active = TRUE ORDER BY sort_order, id"),
     pool.execute(
       `SELECT id, full_name, department_id
        FROM users
@@ -596,7 +597,7 @@ router.post("/", async (request, response) => {
     }
     if (!(await validateDepartment(connection, device.departmentId))) {
       await connection.rollback();
-      response.status(400).json({ message: "Choose an existing department." });
+      response.status(400).json({ message: "Choose an active department." });
       return;
     }
     if (!(await validateAssignedEmployee(connection, device.assignedUserId))) {
@@ -767,7 +768,8 @@ router.patch("/:id", async (request, response) => {
   try {
     await connection.beginTransaction();
     const [currentRows] = await connection.execute(
-      `SELECT id, type, DATE_FORMAT(last_serviced, '%Y-%m-%d') AS last_serviced
+      `SELECT id, type, department_id,
+              DATE_FORMAT(last_serviced, '%Y-%m-%d') AS last_serviced
        FROM devices
        WHERE id = ?
        FOR UPDATE`,
@@ -778,9 +780,13 @@ router.patch("/:id", async (request, response) => {
       response.status(404).json({ message: "Device not found." });
       return;
     }
-    if (!(await validateDepartment(connection, device.departmentId))) {
+    if (!(await validateDepartment(
+      connection,
+      device.departmentId,
+      device.departmentId === currentRows[0].department_id,
+    ))) {
       await connection.rollback();
-      response.status(400).json({ message: "Choose an existing department." });
+      response.status(400).json({ message: "Choose an active department." });
       return;
     }
     if (!(await validateAssignedEmployee(connection, device.assignedUserId))) {

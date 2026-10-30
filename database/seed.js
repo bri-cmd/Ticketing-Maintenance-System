@@ -2,12 +2,14 @@ const bcrypt = require("bcryptjs");
 const { pool } = require("../server/src/db");
 
 const departmentNames = [
+  "Hospital Systems (HS)",
+  "IT",
   "Accounting",
-  "HR",
-  "Sales",
-  "Operations",
+  "HR/Admin",
+  "Marketing",
+  "Training Center",
+  "Purchasing",
   "Warehouse",
-  "Management",
 ];
 
 async function insertUser(connection, user, departments) {
@@ -45,10 +47,13 @@ async function main() {
   try {
     await connection.beginTransaction();
 
-    for (const name of departmentNames) {
+    for (const [index, name] of departmentNames.entries()) {
       await connection.execute(
-        "INSERT INTO departments (name) VALUES (?) ON DUPLICATE KEY UPDATE name = VALUES(name)",
-        [name],
+        `INSERT INTO departments (name, sort_order, active) VALUES (?, ?, TRUE)
+         ON DUPLICATE KEY UPDATE
+           sort_order = VALUES(sort_order),
+           active = TRUE`,
+        [name, index + 1],
       );
     }
     const [departmentRows] = await connection.query(
@@ -100,14 +105,14 @@ async function main() {
         fullName: "BMC Administrator",
         username: "admin",
         email: "admin@bmc.local",
-        department: "Management",
+        department: "IT",
         role: "admin",
       },
       {
         fullName: "BMC IT Technician",
         username: "technician",
         email: "technician@bmc.local",
-        department: "Operations",
+        department: "IT",
         role: "technician",
       },
       {
@@ -121,7 +126,7 @@ async function main() {
         fullName: "Jamie Employee",
         username: "employee2",
         email: "employee2@bmc.local",
-        department: "Sales",
+        department: "Marketing",
         role: "employee",
       },
     ]) {
@@ -145,8 +150,8 @@ async function main() {
         type: "Printer",
         brand: "HP",
         model: "LaserJet",
-        department: "Sales",
-        location: "Sales Office",
+        department: "Marketing",
+        location: "Marketing Office",
         assignedUser: null,
         lastServiced: dates[0].printerLastServiced,
         nextDue: dates[0].printerNextDue,
@@ -224,7 +229,7 @@ async function main() {
          summary = VALUES(summary),
          details = VALUES(details),
          status = VALUES(status)`,
-      [departments.HR],
+      [departments["HR/Admin"]],
     );
 
     await connection.commit();

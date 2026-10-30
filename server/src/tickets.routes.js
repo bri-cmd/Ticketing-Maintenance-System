@@ -168,7 +168,7 @@ function logConfirmationEmail(ticketNo, email) {
 
 router.get("/departments", async (_request, response) => {
   const [departments] = await pool.execute(
-    "SELECT id, name FROM departments ORDER BY name",
+    "SELECT id, name FROM departments WHERE active = TRUE ORDER BY sort_order, id",
   );
   response.json({ departments });
 });
@@ -200,11 +200,11 @@ router.post("/guest", async (request, response) => {
     return;
   }
   const [departments] = await pool.execute(
-    "SELECT id FROM departments WHERE id = ?",
+    "SELECT id FROM departments WHERE id = ? AND active = TRUE",
     [departmentId],
   );
   if (!departments.length) {
-    response.status(400).json({ message: "Choose an existing department." });
+    response.status(400).json({ message: "Choose an active department." });
     return;
   }
 

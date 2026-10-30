@@ -74,11 +74,11 @@ async function addAccount(request, response, role) {
   }
 
   const [departments] = await pool.execute(
-    "SELECT id FROM departments WHERE id = ?",
+    "SELECT id FROM departments WHERE id = ? AND active = TRUE",
     [account.departmentId],
   );
   if (departments.length === 0) {
-    response.status(400).json({ message: "Choose an existing department." });
+    response.status(400).json({ message: "Choose an active department." });
     return;
   }
 
@@ -128,17 +128,9 @@ async function updateAccount(request, response, accountType, isItAccount = false
     response.status(400).json({ message: account.message });
     return;
   }
-  const [departments] = await pool.execute(
-    "SELECT id FROM departments WHERE id = ?",
-    [account.departmentId],
-  );
-  if (!departments.length) {
-    response.status(400).json({ message: "Choose an existing department." });
-    return;
-  }
-
   const [accounts] = await pool.execute(
-    `SELECT id, role, active FROM users WHERE id = ? AND ${accountType}`,
+    `SELECT id, role, active, department_id
+     FROM users WHERE id = ? AND ${accountType}`,
     [userId],
   );
   if (!accounts.length) {
@@ -146,6 +138,15 @@ async function updateAccount(request, response, accountType, isItAccount = false
     return;
   }
   const current = accounts[0];
+  const [departments] = await pool.execute(
+    `SELECT id FROM departments
+     WHERE id = ? AND (active = TRUE OR id = ?)`,
+    [account.departmentId, current.department_id],
+  );
+  if (!departments.length) {
+    response.status(400).json({ message: "Choose an active department." });
+    return;
+  }
   const nextRole = isItAccount ? account.role : "employee";
   if (userId === request.user.id && nextRole !== current.role) {
     response.status(400).json({ message: "You cannot change your own IT role." });
@@ -278,7 +279,7 @@ router.use(requireUser, requirePasswordChangeComplete, requireRole("admin"));
 
 router.get("/departments", async (_request, response) => {
   const [departments] = await pool.execute(
-    "SELECT id, name FROM departments ORDER BY name",
+    "SELECT id, name FROM departments WHERE active = TRUE ORDER BY sort_order, id",
   );
   response.json({ departments });
 });

@@ -173,7 +173,9 @@ router.get("/dashboard", async (_request, response) => {
 });
 
 router.get("/reports/lookups", async (_request, response) => {
-  const [departments] = await pool.query("SELECT id, name FROM departments ORDER BY name");
+  const [departments] = await pool.query(
+    "SELECT id, name FROM departments WHERE active = TRUE ORDER BY sort_order, id",
+  );
   response.json({ departments });
 });
 

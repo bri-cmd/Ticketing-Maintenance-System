@@ -16,7 +16,6 @@ import Modal from "./Modal.jsx";
 import { formatNotificationTime } from "./notification-time.js";
 
 const AuthContext = createContext(null);
-const departmentOptionsFallback = [];
 
 function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -49,7 +48,6 @@ function AuthProvider({ children }) {
 
   async function signOut() {
     await api("/api/auth/logout", { method: "POST" });
-    setUser(null);
   }
 
   return (
@@ -227,7 +225,7 @@ function ProfileMenu() {
     setError("");
     try {
       await signOut();
-      navigate("/");
+      window.location.replace("/");
     } catch (requestError) {
       setError(requestError.message);
     }
@@ -677,7 +675,9 @@ function SignInPage() {
     <main className="signin-page">
       <section className="signin-brand-panel">
         <div className="signin-brand-copy">
-          <img src="/bmc-logo.png" alt="" />
+          <Link to="/" aria-label="BMC IT Support home">
+            <img src="/bmc-logo.png" alt="" />
+          </Link>
           <h1>Brilliant Metal Craft and Machine Design OPC</h1>
           <p>IT Service Desk · Request help, track tickets, manage maintenance</p>
         </div>
@@ -1508,25 +1508,26 @@ function LoadingPage() {
 function StaffLayout({ children, activePage }) {
   const { user } = useAuth();
   const location = useLocation();
+  const [openGroups, setOpenGroups] = useState({});
   const navigation = [
     { label: "Dashboard", href: "/staff", active: activePage === "Dashboard" },
     {
       label: "Ticket queue",
-      active: activePage === "Ticket queue",
+      active: location.pathname.startsWith("/staff/tickets"),
       children: [
         { label: "Ticket queue", href: "/staff/tickets", active: !location.pathname.includes("/walk-in") },
         { label: "New walk-in ticket", href: "/staff/tickets/walk-in", active: location.pathname.includes("/walk-in") },
       ],
     },
+    { label: "Devices", href: "/staff/devices", active: activePage === "Devices" },
     {
-      label: "Devices",
-      active: activePage === "Devices" || activePage === "Maintenance plans",
+      label: "Maintenance schedule",
+      active: activePage === "Maintenance schedule" || activePage === "Maintenance plans",
       children: [
-        { label: "Devices", href: "/staff/devices", active: activePage === "Devices" },
+        { label: "Maintenance schedule", href: "/staff/maintenance-schedule", active: activePage === "Maintenance schedule" },
         { label: "Maintenance plans", href: "/staff/maintenance-plans", active: activePage === "Maintenance plans" },
       ],
     },
-    { label: "Maintenance schedule", href: "/staff/maintenance-schedule", active: activePage === "Maintenance schedule" },
     { label: "Reports", href: "/staff/reports", active: activePage === "Reports" },
     ...(user.role === "admin"
       ? [{
@@ -1539,6 +1540,14 @@ function StaffLayout({ children, activePage }) {
         }]
       : []),
   ];
+
+  useEffect(() => {
+    setOpenGroups((current) => {
+      const activeGroup = navigation.find((item) => item.children && item.active);
+      if (!activeGroup || current[activeGroup.label] === true) return current;
+      return { ...current, [activeGroup.label]: true };
+    });
+  }, [location.pathname]);
 
   return (
     <div className="staff-layout">
@@ -1557,22 +1566,36 @@ function StaffLayout({ children, activePage }) {
                   {item.label}
                 </Link>
               ) : (
-                <details className="sidebar-dropdown" defaultOpen={item.active}>
-                  <summary className={`sidebar-link ${item.active ? "is-active" : ""}`}>
-                    {item.label}<span className="sidebar-dropdown-chevron" aria-hidden="true">⌄</span>
-                  </summary>
-                  <div className="sidebar-submenu">
-                    {item.children.map((child) => (
-                      <Link
-                        className={`sidebar-submenu-link ${child.active ? "is-active" : ""}`}
-                        key={child.href}
-                        to={child.href}
-                      >
-                        {child.label}
-                      </Link>
-                    ))}
-                  </div>
-                </details>
+                <div className={`sidebar-dropdown ${openGroups[item.label] ?? item.active ? "sidebar-group-open" : ""}`}>
+                  <button
+                    aria-expanded={openGroups[item.label] ?? item.active}
+                    className={`sidebar-link sidebar-dropdown-button ${item.active ? "is-active" : ""}`}
+                    onClick={() => setOpenGroups((current) => ({
+                      ...current,
+                      [item.label]: !(current[item.label] ?? item.active),
+                    }))}
+                    type="button"
+                  >
+                    {item.label}
+                    <span className="sidebar-dropdown-chevron" aria-hidden="true">
+                      {(openGroups[item.label] ?? item.active) ? "⌃" : "⌄"}
+                    </span>
+                  </button>
+                  {(openGroups[item.label] ?? item.active) && (
+                    <div className="sidebar-submenu">
+                      {item.children.map((child) => (
+                        <Link
+                          aria-current={child.active ? "page" : undefined}
+                          className={`sidebar-submenu-link ${child.active ? "is-active" : ""}`}
+                          key={child.href}
+                          to={child.href}
+                        >
+                          {child.label}
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           ))}
@@ -2354,32 +2377,48 @@ function DeviceEditorPage() {
     lastServiced: "",
   });
   const [lookups, setLookups] = useState({ departments: [], employees: [], plans: [] });
+  const [inactiveDepartment, setInactiveDepartment] = useState(null);
   const [loading, setLoading] = useState(Boolean(id));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    setInactiveDepartment(null);
     Promise.all([
-      api("/api/staff/devices/lookups").then(setLookups),
-      id ? api(`/api/staff/devices/${encodeURIComponent(id)}`).then(({ device }) => {
-        setForm({
-          assetTag: device.assetTag || "",
-          type: device.type,
-          brand: device.brand || "",
-          model: device.model || "",
-          ram: device.ram || "",
-          motherboard: device.motherboard || "",
-          printerType: device.printerType || "",
-          supplyModel: device.supplyModel || "",
-          ipAddress: device.ipAddress || "",
-          serialNo: device.serialNo || "",
-          location: device.location || "",
-          departmentId: device.departmentId ? String(device.departmentId) : "",
-          assignedUserId: device.assignedUserId ? String(device.assignedUserId) : "",
-          lastServiced: device.lastServiced || "",
-        });
-      }) : Promise.resolve(),
+      api("/api/staff/devices/lookups"),
+      id ? api(`/api/staff/devices/${encodeURIComponent(id)}`) : Promise.resolve(null),
     ])
+      .then(([lookupResult, deviceResult]) => {
+        setLookups(lookupResult);
+        if (deviceResult) {
+          const { device } = deviceResult;
+          setForm({
+            assetTag: device.assetTag || "",
+            type: device.type,
+            brand: device.brand || "",
+            model: device.model || "",
+            ram: device.ram || "",
+            motherboard: device.motherboard || "",
+            printerType: device.printerType || "",
+            supplyModel: device.supplyModel || "",
+            ipAddress: device.ipAddress || "",
+            serialNo: device.serialNo || "",
+            location: device.location || "",
+            departmentId: device.departmentId ? String(device.departmentId) : "",
+            assignedUserId: device.assignedUserId ? String(device.assignedUserId) : "",
+            lastServiced: device.lastServiced || "",
+          });
+          const departmentId = device.departmentId ? String(device.departmentId) : "";
+          if (departmentId && !lookupResult.departments.some(
+            (department) => String(department.id) === departmentId,
+          )) {
+            setInactiveDepartment({
+              id: departmentId,
+              name: device.department || "Inactive department",
+            });
+          }
+        }
+      })
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
   }, [id]);
@@ -2495,6 +2534,11 @@ function DeviceEditorPage() {
             Department
             <select onChange={(event) => updateForm("departmentId", event.target.value)} required value={form.departmentId}>
               <option value="">Choose a department</option>
+              {inactiveDepartment && (
+                <option disabled value={inactiveDepartment.id}>
+                  {inactiveDepartment.name} (inactive)
+                </option>
+              )}
               {lookups.departments.map((department) => (
                 <option key={department.id} value={department.id}>{department.name}</option>
               ))}
@@ -3438,7 +3482,7 @@ function AccountPage({ type }) {
   const endpoint = isEmployee ? "/api/accounts/employees" : "/api/accounts/it";
   const accountRoute = isEmployee ? "employees" : "it";
   const [accounts, setAccounts] = useState([]);
-  const [departments, setDepartments] = useState(departmentOptionsFallback);
+  const [departments, setDepartments] = useState([]);
   const [dialog, setDialog] = useState(null);
   const [editingAccount, setEditingAccount] = useState(null);
   const [editForm, setEditForm] = useState(null);
@@ -3728,6 +3772,16 @@ function AccountPage({ type }) {
                   value={dialog.kind === "create" ? form.departmentId : editForm?.departmentId || ""}
                 >
                   <option value="">Choose a department</option>
+                  {dialog.kind === "edit"
+                    && editingAccount
+                    && !departments.some(
+                      (department) => String(department.id) === String(editingAccount.departmentId),
+                    )
+                    && (
+                      <option disabled value={editingAccount.departmentId}>
+                        {editingAccount.department || "Inactive department"} (inactive)
+                      </option>
+                    )}
                   {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
                 </select>
               </label>
