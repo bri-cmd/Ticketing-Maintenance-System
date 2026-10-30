@@ -1871,12 +1871,29 @@ label small,
 }
 
 .walk-in-form {
-  max-width: 760px;
+  max-width: 860px;
   margin-top: 18px;
   border: 1px solid var(--color-bmc-border);
   border-radius: 10px;
   background: #fff;
   padding: 22px;
+}
+
+.walk-in-form .guest-contact-grid {
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+}
+
+.walk-in-form .walk-in-it-fields {
+  border-top: 1px solid var(--color-bmc-border);
+  padding-top: 18px;
+}
+
+.walk-in-source {
+  margin: 0;
+  color: var(--color-bmc-muted);
+  font-size: 13px;
 }
 
 .walk-in-form > section {
@@ -2690,6 +2707,10 @@ label small,
 
   .guest-contact-grid,
   .request-contact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .walk-in-form .guest-contact-grid {
     grid-template-columns: 1fr;
     column-gap: 0;
   }

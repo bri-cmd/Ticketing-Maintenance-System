@@ -1,5 +1,6 @@
 const express = require("express");
 const { pool } = require("./db");
+const { notifyTicketCreated } = require("./ticket-notifications");
 const { requirePasswordChangeComplete, requireUser } = require("./auth");
 
 const router = express.Router();
@@ -135,16 +136,15 @@ async function createTicket(ticketData) {
        VALUES (?, ?, 'Open', TRUE)`,
       [insertResult.insertId, "Your request has been submitted."],
     );
-    if (ticketData.source === "Signed in" && ticketData.requesterUserId) {
-      await connection.execute(
-        `INSERT INTO notifications (user_id, ticket_id, actor_user_id, title, message)
-         SELECT id, ?, ?, 'Submitted Ticket', ?
-          FROM users
-          WHERE role IN ('technician', 'admin') AND active = TRUE`,
-        [insertResult.insertId, ticketData.requesterUserId, `${ticketNo}: ${ticketData.summary}`],
-      );
-    }
     await connection.commit();
+    await notifyTicketCreated({
+      ticketId: insertResult.insertId,
+      ticketNo,
+      summary: ticketData.summary,
+      source: ticketData.source,
+      actorUserId: ticketData.requesterUserId,
+      requesterUserId: ticketData.requesterUserId,
+    });
     return ticketNo;
   } catch (error) {
     await connection.rollback();

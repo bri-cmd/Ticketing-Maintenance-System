@@ -1992,7 +1992,7 @@ function TicketDetailPage() {
   const { ticketNo } = useParams();
   const { user } = useAuth();
   const [ticket, setTicket] = useState(null);
-  const [technicians, setTechnicians] = useState([]);
+  const [assignees, setAssignees] = useState([]);
   const [assignedTo, setAssignedTo] = useState("");
   const [status, setStatus] = useState("Open");
   const [note, setNote] = useState("");
@@ -2014,7 +2014,7 @@ function TicketDetailPage() {
   useEffect(() => {
     Promise.all([
       loadTicket(),
-      api("/api/staff/tickets/lookups").then(({ technicians: values }) => setTechnicians(values)),
+      api("/api/staff/tickets/lookups").then(({ assignees: values }) => setAssignees(values)),
     ])
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
@@ -2172,9 +2172,9 @@ function TicketDetailPage() {
                   Assigned to
                   <select onChange={(event) => setAssignedTo(event.target.value)} value={assignedTo}>
                     <option value="">Unassigned</option>
-                    {technicians.map((technician) => (
-                      <option key={technician.id} value={technician.id}>
-                        {technician.fullName}{user.id === technician.id ? " (you)" : ""}
+                    {assignees.map((assignee) => (
+                      <option key={assignee.id} value={assignee.id}>
+                        {assignee.fullName} ({assignee.role === "admin" ? "Admin" : "Technician"}){user.id === assignee.id ? " (you)" : ""}
                       </option>
                     ))}
                   </select>
@@ -3302,32 +3302,66 @@ function MaintenancePlanEditorPage() {
 }
 
 function WalkInTicketPage() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [identityType, setIdentityType] = useState("employee");
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [employees, setEmployees] = useState([]);
   const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [employeeComputer, setEmployeeComputer] = useState(null);
+  const [printers, setPrinters] = useState([]);
+  const [deviceChoice, setDeviceChoice] = useState("computer");
+  const [printerId, setPrinterId] = useState("");
+  const [otherDevice, setOtherDevice] = useState("");
+  const [departments, setDepartments] = useState([]);
   const [guestName, setGuestName] = useState("");
-  const [deviceSearch, setDeviceSearch] = useState("");
-  const [devices, setDevices] = useState([]);
-  const [selectedDevice, setSelectedDevice] = useState(null);
-  const [technicians, setTechnicians] = useState([]);
-  const [assignedTo, setAssignedTo] = useState("");
+  const [guestEmail, setGuestEmail] = useState("");
+  const [guestDevice, setGuestDevice] = useState("");
+  const [guestDepartmentId, setGuestDepartmentId] = useState("");
+  const [assignees, setAssignees] = useState([]);
+  const [assignedTo, setAssignedTo] = useState(String(user.id));
   const [helpTopic, setHelpTopic] = useState("");
   const [summary, setSummary] = useState("");
   const [details, setDetails] = useState("");
   const [priority, setPriority] = useState("Normal");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [lookupsLoading, setLookupsLoading] = useState(true);
 
   useEffect(() => {
-    api("/api/staff/tickets/lookups")
-      .then(({ technicians: values }) => {
-        setTechnicians(values);
-        if (values.length) setAssignedTo(String(values[0].id));
+    Promise.all([
+      api("/api/staff/tickets/lookups"),
+      api("/api/tickets/departments"),
+    ])
+      .then(([lookups, departmentResult]) => {
+        setAssignees(lookups.assignees);
+        setPrinters(lookups.printers);
+        setDepartments(departmentResult.departments);
+        setAssignedTo(String(user.id));
+      })
+      .catch((requestError) => setError(requestError.message))
+      .finally(() => setLookupsLoading(false));
+  }, [user.id]);
+
+  useEffect(() => {
+    if (!selectedEmployee) {
+      setEmployeeComputer(null);
+      setDeviceChoice("computer");
+      setPrinterId("");
+      return;
+    }
+    api(`/api/staff/tickets/lookups?employeeId=${selectedEmployee.id}`)
+      .then((result) => {
+        setEmployeeComputer(result.employeeComputer);
+        setPrinters(result.printers);
+        if (result.employeeComputer) setDeviceChoice("computer");
+        else if (result.printers.length) {
+          setDeviceChoice("printer");
+          setPrinterId(String(result.printers[0].id));
+        } else setDeviceChoice("other");
       })
       .catch((requestError) => setError(requestError.message));
-  }, []);
+  }, [selectedEmployee]);
 
   useEffect(() => {
     const query = employeeSearch.trim();
@@ -3343,20 +3377,6 @@ function WalkInTicketPage() {
     return () => window.clearTimeout(timer);
   }, [employeeSearch, identityType]);
 
-  useEffect(() => {
-    const query = deviceSearch.trim();
-    if (query.length < 1) {
-      setDevices([]);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      api(`/api/staff/tickets/lookups?query=${encodeURIComponent(query)}`)
-        .then(({ devices: values }) => setDevices(values))
-        .catch((requestError) => setError(requestError.message));
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [deviceSearch]);
-
   async function submit(event) {
     event.preventDefault();
     setError("");
@@ -3366,9 +3386,18 @@ function WalkInTicketPage() {
         method: "POST",
         body: jsonBody({
           ...(identityType === "employee"
-            ? { requesterUserId: selectedEmployee?.id || "" }
-            : { guestName }),
-          deviceId: selectedDevice?.id,
+            ? {
+                requesterUserId: selectedEmployee?.id || "",
+                deviceChoice,
+                ...(deviceChoice === "printer" ? { printerId: Number(printerId) } : {}),
+                ...(deviceChoice === "other" ? { otherDevice } : {}),
+              }
+            : {
+                guestName,
+                guestEmail,
+                deviceText: guestDevice,
+                departmentId: Number(guestDepartmentId),
+              }),
           helpTopic,
           summary,
           details,
@@ -3389,85 +3418,192 @@ function WalkInTicketPage() {
       <Link className="back-link" to="/staff/tickets">‹ Ticket queue</Link>
       <h1>New walk-in ticket</h1>
       <p className="muted">Record a request received in person.</p>
-      <form className="walk-in-form" onSubmit={submit}>
+      <form className="walk-in-form employee-request-form" onSubmit={submit}>
         <div className="walk-in-identity-toggle">
           <button className={identityType === "employee" ? "selected" : ""} onClick={() => setIdentityType("employee")} type="button">Employee</button>
           <button className={identityType === "guest" ? "selected" : ""} onClick={() => setIdentityType("guest")} type="button">Guest</button>
         </div>
         {identityType === "employee" ? (
-          <section>
+          <>
+            <section className="request-contact">
+              <h2>Employee information</h2>
+              <label>
+                Search employee by name, username, or email
+                <input
+                  onChange={(event) => {
+                    setEmployeeSearch(event.target.value);
+                    setSelectedEmployee(null);
+                  }}
+                  placeholder="Type at least 2 characters"
+                  value={employeeSearch}
+                />
+              </label>
+              <div className="lookup-results">
+                {employees.map((employee) => (
+                  <button
+                    key={employee.id}
+                    onClick={() => {
+                      setSelectedEmployee(employee);
+                      setEmployeeSearch(employee.fullName);
+                      setEmployees([]);
+                    }}
+                    type="button"
+                  >
+                    {employee.fullName} · {employee.username} · {employee.email}
+                  </button>
+                ))}
+              </div>
+              {selectedEmployee && (
+                <div className="request-contact-grid">
+                  <label>Name<input readOnly value={selectedEmployee.fullName} /></label>
+                  <label>Email<input readOnly value={selectedEmployee.email} /></label>
+                  <label>Department<input readOnly value={selectedEmployee.department || ""} /></label>
+                </div>
+              )}
+            </section>
+            <section className="request-section">
+              <h2>What needs help?</h2>
+              <div className="device-choice-grid">
+                <button
+                  className={`device-choice ${deviceChoice === "computer" ? "selected" : ""}`}
+                  disabled={!employeeComputer}
+                  onClick={() => setDeviceChoice("computer")}
+                  type="button"
+                >
+                  <strong>My computer</strong>
+                  <small>{employeeComputer ? `${employeeComputer.brand || ""} ${employeeComputer.model || ""}`.trim() || employeeComputer.assetTag : "No assigned computer"}</small>
+                </button>
+                <button
+                  className={`device-choice ${deviceChoice === "printer" ? "selected" : ""}`}
+                  disabled={!printers.length}
+                  onClick={() => setDeviceChoice("printer")}
+                  type="button"
+                >
+                  <strong>A printer</strong>
+                  <small>Shared by many</small>
+                </button>
+                <button
+                  className={`device-choice ${deviceChoice === "other" ? "selected" : ""}`}
+                  onClick={() => setDeviceChoice("other")}
+                  type="button"
+                >
+                  <strong>Something else</strong>
+                  <small>Tell us what it is</small>
+                </button>
+              </div>
+              {deviceChoice === "printer" && (
+                <div className="printer-options">
+                  <h3>Which printer?</h3>
+                  {printers.map((printer) => (
+                    <label className={`printer-option ${String(printer.id) === printerId ? "selected" : ""}`} key={printer.id}>
+                      <input
+                        checked={String(printer.id) === printerId}
+                        name="walk-in-printer"
+                        onChange={() => setPrinterId(String(printer.id))}
+                        type="radio"
+                        value={printer.id}
+                      />
+                      <span>
+                        <strong>{printer.department ? `${printer.department} printer` : `${printer.brand || "Shared"} printer`}</strong>
+                        {" · "}{printer.assetTag}
+                        <small>{printer.location || `${printer.brand || ""} ${printer.model || ""}`.trim()}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {deviceChoice === "other" && (
+                <TextField label="What device or equipment?" value={otherDevice} onChange={setOtherDevice} maxLength={255} required />
+              )}
+            </section>
+          </>
+        ) : (
+          <>
+            <section className="request-contact">
+              <h2>Contact Information</h2>
+              <div className="guest-contact-grid">
+                <TextField label="Email address" type="email" value={guestEmail} onChange={setGuestEmail} maxLength={254} />
+                <TextField label="Device" value={guestDevice} onChange={setGuestDevice} maxLength={255} placeholder="Asset tag or device name" />
+                <TextField label="Full name" value={guestName} onChange={setGuestName} maxLength={150} required />
+                <label>
+                  Department
+                  <select onChange={(event) => setGuestDepartmentId(event.target.value)} required value={guestDepartmentId}>
+                    <option value="">Choose a department</option>
+                    {departments.map((department) => (
+                      <option key={department.id} value={department.id}>{department.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Help topic
+                  <select onChange={(event) => setHelpTopic(event.target.value)} required value={helpTopic}>
+                    <option value="">Choose a help topic</option>
+                    {helpTopicOptions.map((topic) => <option key={topic} value={topic}>{topic}</option>)}
+                  </select>
+                </label>
+              </div>
+              <p className="muted">Without an email the guest cannot check status online. Give them the ticket number.</p>
+            </section>
+            <section className="request-section">
+              <h2>Ticket Details</h2>
+              <p className="muted">Please describe your issue</p>
+              <TextField label="Issue summary" value={summary} onChange={setSummary} maxLength={200} required />
+              <label>
+                Details
+                <textarea maxLength={10000} onChange={(event) => setDetails(event.target.value)} required rows={4} value={details} />
+              </label>
+            </section>
+          </>
+        )}
+        {identityType === "employee" && (
+          <section className="request-section">
             <label>
-              Search employee by name, username, or email
-              <input
-                onChange={(event) => {
-                  setEmployeeSearch(event.target.value);
-                  setSelectedEmployee(null);
-                }}
-                placeholder="Type at least 2 characters"
-                value={employeeSearch}
+              Help topic
+              <select onChange={(event) => setHelpTopic(event.target.value)} required value={helpTopic}>
+                <option value="">Choose a help topic</option>
+                {helpTopicOptions.map((topic) => <option key={topic} value={topic}>{topic}</option>)}
+              </select>
+            </label>
+            <TextField label="Issue summary" value={summary} onChange={setSummary} maxLength={200} required />
+            <label>
+              What is the problem?
+              <textarea
+                maxLength={10000}
+                onChange={(event) => setDetails(event.target.value)}
+                placeholder="Tell us what happened and what you have already tried."
+                required
+                rows={4}
+                value={details}
               />
             </label>
-            {selectedEmployee && <p className="selected-lookup">Selected: {selectedEmployee.fullName} · {selectedEmployee.email}</p>}
-            <div className="lookup-results">
-              {employees.map((employee) => (
-                <button key={employee.id} onClick={() => { setSelectedEmployee(employee); setEmployeeSearch(employee.fullName); setEmployees([]); }} type="button">
-                  {employee.fullName} · {employee.email}
-                </button>
-              ))}
-            </div>
           </section>
-        ) : (
-          <TextField label="Guest name" value={guestName} onChange={setGuestName} maxLength={150} required />
         )}
-        <section>
+        <section className="request-section walk-in-it-fields">
           <label>
-            Search device by asset tag, brand, or model
-            <input
-              onChange={(event) => {
-                setDeviceSearch(event.target.value);
-                setSelectedDevice(null);
-              }}
-              placeholder="Type to search devices"
-              value={deviceSearch}
-            />
+            Priority
+            <select onChange={(event) => setPriority(event.target.value)} value={priority}>
+              <option value="Low">Low</option>
+              <option value="Normal">Medium</option>
+              <option value="High">High</option>
+              <option value="Urgent">Urgent</option>
+            </select>
           </label>
-          {selectedDevice && <p className="selected-lookup">Selected: {selectedDevice.assetTag} · {selectedDevice.type}</p>}
-          <div className="lookup-results">
-            {devices.map((device) => (
-              <button key={device.id} onClick={() => { setSelectedDevice(device); setDeviceSearch(device.assetTag); setDevices([]); }} type="button">
-                {device.assetTag} · {device.type} {[device.brand, device.model].filter(Boolean).join(" ")}
-              </button>
-            ))}
-          </div>
+          <label>
+            Assign to
+            <select onChange={(event) => setAssignedTo(event.target.value)} value={assignedTo}>
+              <option value="">Unassigned</option>
+              {assignees.map((assignee) => (
+                <option key={assignee.id} value={assignee.id}>
+                  {assignee.fullName} ({assignee.role === "admin" ? "Admin" : "Technician"})
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="walk-in-source">Source: Walk-in (set automatically)</p>
         </section>
-        <label>
-          Help topic
-          <select onChange={(event) => setHelpTopic(event.target.value)} required value={helpTopic}>
-            <option value="">Choose a help topic</option>
-            {helpTopicOptions.map((topic) => <option key={topic} value={topic}>{topic}</option>)}
-          </select>
-        </label>
-        <TextField label="Issue summary" value={summary} onChange={setSummary} maxLength={200} required />
-        <label>
-          Problem details
-          <textarea maxLength={10000} onChange={(event) => setDetails(event.target.value)} required rows={5} value={details} />
-        </label>
-        <label>
-          Priority
-          <select onChange={(event) => setPriority(event.target.value)} value={priority}>
-            {["Urgent", "High", "Normal", "Low"].map((value) => <option key={value} value={value}>{value}</option>)}
-          </select>
-        </label>
-        <label>
-          Assign to IT staff
-          <select onChange={(event) => setAssignedTo(event.target.value)} required value={assignedTo}>
-            <option value="">Choose IT staff</option>
-            {technicians.map((technician) => <option key={technician.id} value={technician.id}>{technician.fullName}</option>)}
-          </select>
-        </label>
         <FormError message={error} />
         <div className="form-actions">
-          <button className="button button-primary" disabled={saving}>{saving ? "Saving..." : "Create walk-in ticket"}</button>
+          <button className="button button-primary" disabled={saving || lookupsLoading}>{saving ? "Saving..." : "Create walk-in ticket"}</button>
           <Link className="button button-secondary" to="/staff/tickets">Cancel</Link>
         </div>
       </form>
