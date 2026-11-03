@@ -56,6 +56,23 @@ async function createTicket(ticketData) {
         ticketData.initialNoteVisible ?? true,
       ],
     );
+    if (ticketData.assignedTo !== null && ticketData.assignedTo !== undefined) {
+      const [assignees] = await connection.execute(
+        "SELECT full_name FROM users WHERE id = ?",
+        [ticketData.assignedTo],
+      );
+      if (assignees.length) {
+        await connection.execute(
+          `INSERT INTO ticket_updates (ticket_id, user_id, note, visible_to_requester)
+           VALUES (?, ?, ?, FALSE)`,
+          [
+            insertResult.insertId,
+            ticketData.createdByUserId ?? ticketData.actorUserId ?? null,
+            `Assigned to ${assignees[0].full_name} when the ticket was created.`,
+          ],
+        );
+      }
+    }
     await connection.commit();
     await queueTicketReceived({
       ticketId: insertResult.insertId,

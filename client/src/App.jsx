@@ -1819,7 +1819,12 @@ function StaffLayout({ children, activePage }) {
       label: "Ticket queue",
       active: location.pathname.startsWith("/staff/tickets"),
       children: [
-        { label: "Ticket queue", href: "/staff/tickets", active: !location.pathname.includes("/walk-in") },
+        {
+          label: "Ticket queue",
+          href: "/staff/tickets",
+          active: !location.pathname.includes("/walk-in") && !location.pathname.includes("/history"),
+        },
+        { label: "Ticket History", href: "/staff/tickets/history", active: location.pathname.includes("/history") },
         { label: "New walk-in ticket", href: "/staff/tickets/walk-in", active: location.pathname.includes("/walk-in") },
       ],
     },
@@ -1922,9 +1927,13 @@ function StaffHome() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
+  async function loadDashboard() {
+    const result = await api("/api/staff/dashboard");
+    setDashboard(result);
+  }
+
   useEffect(() => {
-    api("/api/staff/dashboard")
-      .then(setDashboard)
+    loadDashboard()
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
   }, []);
@@ -1941,8 +1950,8 @@ function StaffHome() {
       {loading ? <p className="muted">Loading dashboard...</p> : dashboard && (
         <>
           <div className="dashboard-metrics">
-            <MetricCard label="Open tickets" value={dashboard.metrics.openTickets} />
-            <MetricCard label="Resolved this week" value={dashboard.metrics.resolvedThisWeek} />
+            <MetricCard label="Pending tickets" value={dashboard.metrics.pendingTickets} />
+            <MetricCard label="Closed tickets" value={dashboard.metrics.closedTickets} />
             <MetricCard label="Overdue maintenance" value={dashboard.metrics.overdueMaintenance} tone="danger" />
             <MetricCard label="Maintenance due this week" value={dashboard.metrics.maintenanceDueThisWeek} />
             <MetricCard label="Devices on schedule" value={`${dashboard.metrics.onSchedulePercent}%`} tone="success" />
@@ -1957,17 +1966,20 @@ function StaffHome() {
                 <ul className="dashboard-list">
                   {dashboard.recentTickets.map((ticket) => (
                     <li key={ticket.ticketNo}>
-                      <div>
-                        <Link className="dashboard-list-title" to={`/staff/tickets/${ticket.ticketNo}`}>
-                          {ticket.ticketNo} · {ticket.summary}
-                        </Link>
-                        <span className="dashboard-list-meta">
-                          {[ticket.department, ticket.source, ticket.requesterName].filter(Boolean).join(" · ")}
-                        </span>
-                      </div>
-                      <span className={`staff-status-badge status-${ticket.status.toLowerCase().replace(/\s+/g, "-")}`}>
-                        {ticket.status}
-                      </span>
+                      <Link
+                        className="dashboard-list-row"
+                        to={`/staff/tickets/${ticket.ticketNo}`}
+                      >
+                        <div className="dashboard-list-copy">
+                          <span className="dashboard-list-title">
+                            {ticket.ticketNo} · {ticket.summary}
+                          </span>
+                          <span className="dashboard-list-meta">
+                            {[ticket.department, ticket.source, ticket.requesterName].filter(Boolean).join(" · ")}
+                          </span>
+                        </div>
+                        <StatusBadge status={ticket.status} />
+                      </Link>
                     </li>
                   ))}
                 </ul>
@@ -1979,7 +1991,7 @@ function StaffHome() {
                 <Link to="/staff/maintenance-schedule">View schedule</Link>
               </div>
               {dashboard.maintenanceAttention.length ? (
-                <ul className="dashboard-list">
+                <ul className="dashboard-list dashboard-maintenance-list">
                   {dashboard.maintenanceAttention.map((device) => (
                     <li key={device.id}>
                       <div>
@@ -1988,7 +2000,7 @@ function StaffHome() {
                         </Link>
                         <span className="dashboard-list-meta">
                           {device.planName || `${device.intervalValue || ""} ${device.intervalUnit || ""}`.trim()}
-                          {device.lastServiced ? ` · Last serviced ${device.lastServiced}` : ""}
+                          {device.lastServiced ? ` · Last serviced ${formatMaintenanceDate(device.lastServiced)}` : ""}
                         </span>
                       </div>
                       <span className={`maintenance-status status-${device.status.toLowerCase().replace(/\s+/g, "-")}`}>
@@ -2017,6 +2029,11 @@ function MetricCard({ label, value, tone = "" }) {
       <strong>{value}</strong>
     </section>
   );
+}
+
+function StatusBadge({ status }) {
+  const statusClass = status.toLowerCase().replace(/\s+/g, "-");
+  return <span className={`staff-status-badge status-${statusClass}`}>{status}</span>;
 }
 
 function formatResolutionMinutes(minutes) {
@@ -2151,6 +2168,7 @@ function ReportsPage() {
           <div className="reports-metrics">
             <MetricCard label="Tickets received" value={report.summary.ticketsReceived} />
             <MetricCard label="Tickets resolved" value={report.summary.ticketsResolved} />
+            <MetricCard label="Tickets closed" value={report.summary.ticketsClosed} />
             <MetricCard label="Average time to resolve" value={formatResolutionMinutes(report.summary.averageResolutionMinutes)} />
             <MetricCard label="Devices on schedule" value={`${report.summary.onSchedulePercent}%`} tone="success" />
           </div>
@@ -2173,14 +2191,23 @@ function ReportsPage() {
 }
 
 function TicketQueuePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [tickets, setTickets] = useState([]);
-  const [status, setStatus] = useState("All");
+  const [status, setStatus] = useState(() => {
+    const initial = searchParams.get("status");
+    return ["Open", "In Progress", "Resolved"].includes(initial) ? initial : "All";
+  });
   const [priority, setPriority] = useState("All");
   const [source, setSource] = useState("All");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const requestedStatus = searchParams.get("status");
+    setStatus(["Open", "In Progress", "Resolved"].includes(requestedStatus) ? requestedStatus : "All");
+  }, [searchParams]);
 
   useEffect(() => {
     const query = new URLSearchParams();
@@ -2227,11 +2254,23 @@ function TicketQueuePage() {
         </form>
         <label>
           Status
-          <select onChange={(event) => setStatus(event.target.value)} value={status}>
+          <select
+            onChange={(event) => {
+              const nextStatus = event.target.value;
+              setStatus(nextStatus);
+              setSearchParams(nextStatus === "All" ? {} : { status: nextStatus });
+            }}
+            value={status}
+          >
             <option value="All">All statuses</option>
-            {ticketStatuses.map((value) => <option key={value} value={value}>{value}</option>)}
+            {ticketStatuses.filter((value) => value !== "Closed").map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
         </label>
+        {status !== "All" && (
+          <Link className="button button-secondary ticket-filter-clear" to="/staff/tickets">
+            Show all tickets
+          </Link>
+        )}
         <label>
           Priority
           <select onChange={(event) => setPriority(event.target.value)} value={priority}>
@@ -2276,7 +2315,7 @@ function TicketQueuePage() {
                 </td>
                 <td><span className={`priority-badge priority-${ticket.priority.toLowerCase()}`}>{ticket.priority === "Normal" ? "Medium" : ticket.priority}</span></td>
                 <td><span className={`source-badge source-${ticket.source.toLowerCase().replace(/\s+/g, "-")}`}>{ticket.source}</span></td>
-                <td><span className={`staff-status-badge status-${ticket.status.toLowerCase().replace(/\s+/g, "-")}`}>{ticket.status}</span></td>
+                <td><StatusBadge status={ticket.status} /></td>
               </tr>
             ))}
             {!loading && tickets.length === 0 && (
@@ -2291,6 +2330,144 @@ function TicketQueuePage() {
 }
 
 const ticketStatuses = ["Open", "In Progress", "Resolved", "Closed"];
+
+function TicketHistoryPage() {
+  const [tickets, setTickets] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [assignees, setAssignees] = useState([]);
+  const [searchInput, setSearchInput] = useState("");
+  const [filters, setFilters] = useState({ search: "", departmentId: "All", assignedTo: "All", from: "", to: "" });
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api("/api/staff/tickets/history/lookups")
+      .then(({ departments: departmentValues, assignees: assigneeValues }) => {
+        setDepartments(departmentValues);
+        setAssignees(assigneeValues);
+      })
+      .catch((requestError) => setError(requestError.message));
+  }, []);
+
+  useEffect(() => {
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value && value !== "All") query.set(key, value);
+    });
+    setLoading(true);
+    api(`/api/staff/tickets/history?${query}`)
+      .then(({ tickets: values }) => {
+        setTickets(values);
+        setError("");
+      })
+      .catch((requestError) => setError(requestError.message))
+      .finally(() => setLoading(false));
+  }, [filters]);
+
+  function submitSearch(event) {
+    event.preventDefault();
+    setFilters((current) => ({ ...current, search: searchInput.trim() }));
+  }
+
+  return (
+    <StaffLayout activePage="Ticket History">
+      <div className="ticket-queue-heading">
+        <div>
+          <h1>Ticket History</h1>
+          <p className="muted">Closed tickets and their full activity remain available here.</p>
+        </div>
+        <Link className="button button-secondary" to="/staff/tickets">Active ticket queue</Link>
+      </div>
+      <div className="ticket-filters ticket-history-filters">
+        <form className="ticket-search" onSubmit={submitSearch}>
+          <input
+            aria-label="Search ticket history"
+            maxLength={120}
+            onChange={(event) => setSearchInput(event.target.value)}
+            placeholder="Search number, requester, department, device, or technician"
+            value={searchInput}
+          />
+          <button className="button button-secondary">Search</button>
+        </form>
+        <label>
+          Department
+          <select
+            onChange={(event) => setFilters((current) => ({ ...current, departmentId: event.target.value }))}
+            value={filters.departmentId}
+          >
+            <option value="All">All departments</option>
+            {departments.map((department) => (
+              <option key={department.id} value={department.id}>{department.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Technician
+          <select
+            onChange={(event) => setFilters((current) => ({ ...current, assignedTo: event.target.value }))}
+            value={filters.assignedTo}
+          >
+            <option value="All">All technicians</option>
+            {assignees.map((assignee) => (
+              <option key={assignee.id} value={assignee.id}>
+                {assignee.fullName} ({assignee.role === "admin" ? "Admin" : "Technician"})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Closed from
+          <input
+            onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))}
+            type="date"
+            value={filters.from}
+          />
+        </label>
+        <label>
+          Closed to
+          <input
+            onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))}
+            type="date"
+            value={filters.to}
+          />
+        </label>
+      </div>
+      <FormError message={error} />
+      <div className="table-wrap staff-ticket-table-wrap">
+        <table className="accounts-table staff-ticket-table">
+          <thead>
+            <tr>
+              <th>Ticket</th><th>Requester</th><th>Department</th><th>Device</th>
+              <th>Technician</th><th>Source</th><th>Status</th><th>Closed</th><th>Closed by</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tickets.map((ticket) => (
+              <tr key={ticket.ticketNo}>
+                <td>
+                  <Link to={`/staff/tickets/${ticket.ticketNo}`}>{ticket.ticketNo}</Link>
+                  <small className="ticket-subject">{ticket.summary}</small>
+                </td>
+                <td>{ticket.requesterName}<small className="ticket-subject">{ticket.requesterEmail || "No email recorded"}</small></td>
+                <td>{ticket.department || "—"}</td>
+                <td>{ticket.deviceTag || ticket.deviceText || "Not registered"}</td>
+                <td>{ticket.assignedName || "Unassigned"}</td>
+                <td><span className={`source-badge source-${ticket.source.toLowerCase().replace(/\s+/g, "-")}`}>{ticket.source}</span></td>
+                <td><StatusBadge status={ticket.status} /></td>
+                <td>{ticket.closedAt || "—"}</td>
+                <td>{ticket.closedBy || "Unknown"}</td>
+              </tr>
+            ))}
+            {!loading && tickets.length === 0 && (
+              <tr><td className="empty-cell" colSpan={9}>No closed tickets match these filters.</td></tr>
+            )}
+            {loading && <tr><td className="empty-cell" colSpan={9}>Loading ticket history...</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </StaffLayout>
+  );
+}
 
 function TicketDetailPage() {
   const { ticketNo } = useParams();
@@ -2358,6 +2535,51 @@ function TicketDetailPage() {
     }
   }
 
+  async function quickAction(nextStatus) {
+    const action = nextStatus === "Resolved" ? "mark this ticket as resolved" : "close this ticket";
+    if (!window.confirm(`Are you sure you want to ${action}?`)) return;
+    setError("");
+    setNotice("");
+    setSaving(true);
+    try {
+      const result = await api(`/api/staff/tickets/${encodeURIComponent(ticketNo)}`, {
+        method: "PATCH",
+        body: jsonBody({
+          status: nextStatus,
+          assignedTo: ticket.assignedTo ?? "",
+          note: "",
+          visibleToRequester: false,
+        }),
+      });
+      setNotice(result.message);
+      await loadTicket();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function reopenTicket() {
+    const reason = window.prompt("Why is this closed ticket being reopened?");
+    if (reason === null) return;
+    setError("");
+    setNotice("");
+    setSaving(true);
+    try {
+      const result = await api(`/api/staff/tickets/${encodeURIComponent(ticketNo)}/reopen`, {
+        method: "POST",
+        body: jsonBody({ reason }),
+      });
+      setNotice(result.message);
+      await loadTicket();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function linkDevice(assetTag) {
     setError("");
     setNotice("");
@@ -2389,7 +2611,7 @@ function TicketDetailPage() {
               <h1>{ticket.ticketNo}</h1>
               <p className="muted">{ticket.summary}</p>
             </div>
-            <span className={`staff-status-badge status-${ticket.status.toLowerCase().replace(/\s+/g, "-")}`}>{ticket.status}</span>
+            <StatusBadge status={ticket.status} />
           </div>
           <FormError message={error} />
           {notice && <div className="notice" role="status">{notice}</div>}
@@ -2401,6 +2623,9 @@ function TicketDetailPage() {
                 <div><dt>Department</dt><dd>{ticket.department || "—"}</dd></div>
                 <div><dt>Priority</dt><dd><span className={`priority-badge priority-${ticket.priority.toLowerCase()}`}>{ticket.priority === "Normal" ? "Medium" : ticket.priority}</span></dd></div>
                 <div><dt>Source</dt><dd><span className={`source-badge source-${ticket.source.toLowerCase().replace(/\s+/g, "-")}`}>{ticket.source}</span></dd></div>
+                {ticket.status === "Closed" && (
+                  <div><dt>Closed</dt><dd>{ticket.closedAt || "Date not recorded"}{ticket.closedBy ? ` · ${ticket.closedBy}` : ""}</dd></div>
+                )}
                 <div><dt>Help topic</dt><dd>{ticket.helpTopic}</dd></div>
                 <div>
                   <dt>Device</dt>
@@ -2416,7 +2641,7 @@ function TicketDetailPage() {
                       <>
                         <span>{ticket.device?.text || <span className="unregistered-badge">Not registered</span>}</span>
                         {ticket.device?.text && <span className="unregistered-badge">Not registered</span>}
-                        <div className="link-device-tools">
+                        {ticket.status !== "Closed" && <div className="link-device-tools">
                           <label>
                             Search asset tag
                             <input
@@ -2436,7 +2661,7 @@ function TicketDetailPage() {
                           >
                             Add device
                           </Link>
-                        </div>
+                        </div>}
                       </>
                     )}
                   </dd>
@@ -2456,7 +2681,9 @@ function TicketDetailPage() {
                         <small>Status: {entry.oldStatus || "—"} → {entry.newStatus || "—"}</small>
                       )}
                       <small>{entry.author} · {formatDate(entry.createdAt)}</small>
-                      {entry.visibleToRequester && <span className="history-visible-badge">Shown to requester</span>}
+                      {entry.visibleToRequester
+                        ? <span className="history-visible-badge">Shown to requester</span>
+                        : <span className="history-internal-badge">Internal activity</span>}
                     </div>
                   </li>
                 ))}
@@ -2464,12 +2691,42 @@ function TicketDetailPage() {
               </ol>
             </section>
             <section className="ticket-detail-card update-ticket-card">
-              <h2>Update this ticket</h2>
-              <form onSubmit={saveUpdate}>
+              {ticket.status === "Closed" ? (
+                <>
+                  <h2>Ticket closed</h2>
+                  <p className="muted">
+                    This ticket is read-only. {user.role === "admin"
+                      ? "Reopen it explicitly to make further updates."
+                      : "Only an administrator can reopen it."}
+                  </p>
+                  {user.role === "admin" && (
+                    <div className="ticket-lifecycle-actions">
+                      <button className="button button-primary" disabled={saving} onClick={reopenTicket} type="button">
+                        Reopen Ticket
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <h2>Update this ticket</h2>
+                  <div className="ticket-lifecycle-actions">
+                    {(ticket.status === "Open" || ticket.status === "In Progress") && (
+                      <button className="button button-primary" disabled={saving} onClick={() => quickAction("Resolved")} type="button">
+                        Mark as Resolved
+                      </button>
+                    )}
+                    {ticket.status === "Resolved" && (
+                      <button className="button button-primary" disabled={saving} onClick={() => quickAction("Closed")} type="button">
+                        Close Ticket
+                      </button>
+                    )}
+                  </div>
+                  <form onSubmit={saveUpdate}>
                 <label>
                   Status
                   <select onChange={(event) => setStatus(event.target.value)} value={status}>
-                    {ticketStatuses.map((value) => <option key={value} value={value}>{value}</option>)}
+                    {ticketStatuses.filter((value) => value !== "Closed").map((value) => <option key={value} value={value}>{value}</option>)}
                   </select>
                 </label>
                 <label>
@@ -2504,7 +2761,9 @@ function TicketDetailPage() {
                 <button className="button button-primary" disabled={saving}>
                   {saving ? "Saving..." : "Save update"}
                 </button>
-              </form>
+                  </form>
+                </>
+              )}
             </section>
           </div>
         </>
@@ -4304,6 +4563,10 @@ function App() {
         <Route
           path="/staff/tickets"
           element={<AuthGate roles={["technician", "admin"]}><TicketQueuePage /></AuthGate>}
+        />
+        <Route
+          path="/staff/tickets/history"
+          element={<AuthGate roles={["technician", "admin"]}><TicketHistoryPage /></AuthGate>}
         />
         <Route
           path="/staff/tickets/walk-in"

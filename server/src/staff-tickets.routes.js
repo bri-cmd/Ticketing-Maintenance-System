@@ -14,13 +14,20 @@ const statuses = new Set(["Open", "In Progress", "Resolved", "Closed"]);
 const priorities = new Set(["Low", "Normal", "High", "Urgent"]);
 const sources = new Set(["Online", "Walk-in"]);
 const ticketNumberPattern = /^IT-\d{4,}$/i;
+const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+
+function isValidDate(value) {
+  if (typeof value !== "string" || !datePattern.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
 
 router.use(requireUser, requirePasswordChangeComplete, requireRole("technician", "admin"));
 
 router.get("/", async (request, response) => {
   const { status, priority, source, search } = request.query;
-  if (status && status !== "All" && !statuses.has(status)) {
-    response.status(400).json({ message: "Choose a valid ticket status." });
+  if (status && status !== "All" && (!statuses.has(status) || status === "Closed")) {
+    response.status(400).json({ message: "Choose an active ticket status. Closed tickets are in Ticket History." });
     return;
   }
   if (priority && priority !== "All" && !priorities.has(priority)) {
@@ -32,7 +39,7 @@ router.get("/", async (request, response) => {
     return;
   }
   const term = typeof search === "string" ? search.trim().slice(0, 120) : "";
-  const conditions = [];
+  const conditions = ["t.status <> 'Closed'"];
   const values = [];
   if (status && status !== "All") {
     conditions.push("t.status = ?");
@@ -84,6 +91,114 @@ router.get("/", async (request, response) => {
       source: ticket.source,
       status: ticket.status,
       submittedAt: ticket.created_at,
+    })),
+  });
+});
+
+router.get("/history/lookups", async (_request, response) => {
+  const [departments] = await pool.query(
+    "SELECT id, name FROM departments ORDER BY sort_order, id",
+  );
+  const [assignees] = await pool.query(
+    `SELECT DISTINCT user.id, user.full_name, user.role
+     FROM users user
+     JOIN tickets ticket ON ticket.assigned_to = user.id
+     WHERE ticket.status = 'Closed' AND user.role IN ('admin', 'technician')
+     ORDER BY user.full_name`,
+  );
+  response.json({ departments, assignees });
+});
+
+router.get("/history", async (request, response) => {
+  const { search, departmentId, assignedTo, from, to } = request.query;
+  const term = typeof search === "string" ? search.trim().slice(0, 120) : "";
+  if (departmentId && departmentId !== "All"
+    && (!/^\d+$/.test(String(departmentId)) || Number(departmentId) < 1)) {
+    response.status(400).json({ message: "Choose a valid department." });
+    return;
+  }
+  if (assignedTo && assignedTo !== "All"
+    && (!/^\d+$/.test(String(assignedTo)) || Number(assignedTo) < 1)) {
+    response.status(400).json({ message: "Choose a valid technician." });
+    return;
+  }
+  if ((from && !isValidDate(String(from))) || (to && !isValidDate(String(to)))) {
+    response.status(400).json({ message: "Choose valid dates for the history range." });
+    return;
+  }
+  if (from && to && from > to) {
+    response.status(400).json({ message: "The start date must be on or before the end date." });
+    return;
+  }
+
+  const conditions = ["ticket.status = 'Closed'"];
+  const values = [];
+  if (term) {
+    const like = `%${term}%`;
+    conditions.push(`(
+      ticket.ticket_no LIKE ? OR ticket.guest_name LIKE ? OR requester.full_name LIKE ?
+      OR COALESCE(ticket.requester_email, requester.email, ticket.guest_email) LIKE ?
+      OR department.name LIKE ? OR device.asset_tag LIKE ? OR ticket.device_text LIKE ?
+      OR device.brand LIKE ? OR device.model LIKE ? OR assigned.full_name LIKE ?
+    )`);
+    values.push(like, like, like, like, like, like, like, like, like, like);
+  }
+  if (departmentId && departmentId !== "All") {
+    conditions.push("ticket.department_id = ?");
+    values.push(Number(departmentId));
+  }
+  if (assignedTo && assignedTo !== "All") {
+    conditions.push("ticket.assigned_to = ?");
+    values.push(Number(assignedTo));
+  }
+  if (from) {
+    conditions.push("ticket.closed_at >= ?");
+    values.push(from);
+  }
+  if (to) {
+    conditions.push("ticket.closed_at < DATE_ADD(?, INTERVAL 1 DAY)");
+    values.push(to);
+  }
+
+  const [rows] = await pool.execute(
+    `SELECT ticket.ticket_no, ticket.summary, ticket.status, ticket.priority, ticket.source,
+            COALESCE(requester.full_name, ticket.guest_name, 'Employee') AS requester_name,
+            COALESCE(ticket.requester_email, requester.email, ticket.guest_email) AS requester_email,
+            department.name AS department, device.asset_tag, ticket.device_text,
+            assigned.full_name AS assigned_name,
+            DATE_FORMAT(ticket.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+            DATE_FORMAT(ticket.closed_at, '%Y-%m-%d %H:%i:%s') AS closed_at,
+            (SELECT closer.full_name
+             FROM ticket_updates close_update
+             LEFT JOIN users closer ON closer.id = close_update.user_id
+             WHERE close_update.ticket_id = ticket.id AND close_update.new_status = 'Closed'
+             ORDER BY close_update.created_at DESC, close_update.id DESC
+             LIMIT 1) AS closed_by
+     FROM tickets ticket
+     LEFT JOIN users requester ON requester.id = ticket.requester_user_id
+     LEFT JOIN departments department ON department.id = ticket.department_id
+     LEFT JOIN devices device ON device.id = ticket.device_id
+     LEFT JOIN users assigned ON assigned.id = ticket.assigned_to
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY ticket.closed_at DESC, ticket.id DESC`,
+    values,
+  );
+  response.json({
+    tickets: rows.map((ticket) => ({
+      ticketNo: ticket.ticket_no,
+      summary: ticket.summary,
+      requesterName: ticket.requester_name,
+      requesterEmail: ticket.requester_email,
+      department: ticket.department,
+      deviceTag: ticket.asset_tag,
+      deviceText: ticket.device_text,
+      assignedName: ticket.assigned_name,
+      priority: ticket.priority,
+      source: ticket.source,
+      status: ticket.status,
+      submittedAt: ticket.created_at,
+      closedAt: ticket.closed_at,
+      closedBy: ticket.closed_by,
     })),
   });
 });
@@ -229,6 +344,7 @@ router.get("/:ticketNo", async (request, response) => {
     [rows[0].id],
   );
   const ticket = rows[0];
+  const closeEvent = [...updates].reverse().find((update) => update.new_status === "Closed");
   response.json({
     ticket: {
       id: ticket.id,
@@ -259,6 +375,8 @@ router.get("/:ticketNo", async (request, response) => {
       assignedTo: ticket.assigned_to,
       assignedName: ticket.assigned_name,
       submittedAt: ticket.created_at,
+      closedAt: closeEvent?.created_at || null,
+      closedBy: closeEvent?.author || null,
       history: updates.map((update) => ({
         note: update.note,
         oldStatus: update.old_status,
@@ -308,10 +426,11 @@ router.patch("/:ticketNo", async (request, response) => {
     await connection.beginTransaction();
     const [tickets] = await connection.execute(
       `SELECT ticket.id, ticket.ticket_no, ticket.requester_user_id, ticket.status,
-              ticket.assigned_to,
+              ticket.assigned_to, assigned.full_name AS assigned_name,
               COALESCE(ticket.requester_email, ticket.guest_email, requester.email) AS requester_email
        FROM tickets ticket
        LEFT JOIN users requester ON requester.id = ticket.requester_user_id
+       LEFT JOIN users assigned ON assigned.id = ticket.assigned_to
        WHERE ticket.ticket_no = ? FOR UPDATE`,
       [ticketNo],
     );
@@ -320,7 +439,21 @@ router.patch("/:ticketNo", async (request, response) => {
       response.status(404).json({ message: "Ticket not found." });
       return;
     }
-    if (assignedTo !== null) {
+    const current = tickets[0];
+    if (current.status === "Closed") {
+      await connection.rollback();
+      response.status(409).json({ message: "Closed tickets cannot be edited. An admin must reopen the ticket first." });
+      return;
+    }
+    if (status === "Closed" && current.status !== "Resolved") {
+      await connection.rollback();
+      response.status(400).json({ message: "Only resolved tickets can be closed." });
+      return;
+    }
+    const statusChanged = current.status !== status;
+    const assignmentChanged = Number(current.assigned_to) !== assignedTo
+      && !(current.assigned_to === null && assignedTo === null);
+    if (assignmentChanged && assignedTo !== null) {
       const [assignees] = await connection.execute(
         "SELECT id FROM users WHERE id = ? AND role IN ('admin', 'technician') AND active = TRUE",
         [assignedTo],
@@ -331,24 +464,23 @@ router.patch("/:ticketNo", async (request, response) => {
         return;
       }
     }
-
-    const current = tickets[0];
-    const statusChanged = current.status !== status;
-    const assignmentChanged = Number(current.assigned_to) !== assignedTo
-      && !(current.assigned_to === null && assignedTo === null);
     let assignedName = null;
     const auditParts = [];
     if (statusChanged) auditParts.push(`Status changed from ${current.status} to ${status}.`);
     if (assignmentChanged) {
       if (assignedTo === null) {
-        auditParts.push("Ticket unassigned.");
+        auditParts.push(current.assigned_name
+          ? `Technician ${current.assigned_name} was unassigned.`
+          : "Ticket unassigned.");
       } else {
         const [assignees] = await connection.execute(
           "SELECT full_name FROM users WHERE id = ?",
           [assignedTo],
         );
         assignedName = assignees[0].full_name;
-        auditParts.push(`Assigned to ${assignedName}.`);
+        auditParts.push(current.assigned_name
+          ? `Technician changed from ${current.assigned_name} to ${assignedName}.`
+          : `Assigned to ${assignedName}.`);
       }
     }
     if (assignedTo !== null && assignedName === null) {
@@ -371,6 +503,7 @@ router.patch("/:ticketNo", async (request, response) => {
        SET status = ?, assigned_to = ?,
            resolved_at = CASE
              WHEN ? = 'Resolved' THEN COALESCE(resolved_at, NOW())
+             WHEN ? = 'Closed' THEN resolved_at
              ELSE NULL
            END,
            closed_at = CASE
@@ -378,7 +511,7 @@ router.patch("/:ticketNo", async (request, response) => {
              ELSE NULL
            END
        WHERE id = ?`,
-      [status, assignedTo, status, status, current.id],
+      [status, assignedTo, status, status, status, current.id],
     );
     if (auditParts.length) {
       await connection.execute(
@@ -443,6 +576,77 @@ router.patch("/:ticketNo", async (request, response) => {
   }
 });
 
+router.post("/:ticketNo/reopen", requireRole("admin"), async (request, response) => {
+  const ticketNo = request.params.ticketNo.toUpperCase();
+  const reason = typeof request.body?.reason === "string" ? request.body.reason.trim() : "";
+  if (!ticketNumberPattern.test(ticketNo)) {
+    response.status(400).json({ message: "Enter a valid ticket number." });
+    return;
+  }
+  if (reason.length < 5 || reason.length > 1000) {
+    response.status(400).json({ message: "Enter a reopening reason between 5 and 1,000 characters." });
+    return;
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [tickets] = await connection.execute(
+      `SELECT ticket.id, ticket.ticket_no, ticket.requester_user_id, ticket.status,
+              ticket.assigned_to, assigned.full_name AS assigned_name,
+              COALESCE(ticket.requester_email, ticket.guest_email, requester.email) AS requester_email
+       FROM tickets ticket
+       LEFT JOIN users requester ON requester.id = ticket.requester_user_id
+       LEFT JOIN users assigned ON assigned.id = ticket.assigned_to
+       WHERE ticket.ticket_no = ? FOR UPDATE`,
+      [ticketNo],
+    );
+    if (!tickets.length) {
+      await connection.rollback();
+      response.status(404).json({ message: "Ticket not found." });
+      return;
+    }
+    const current = tickets[0];
+    if (current.status !== "Closed") {
+      await connection.rollback();
+      response.status(409).json({ message: "Only closed tickets can be reopened." });
+      return;
+    }
+
+    await connection.execute(
+      "UPDATE tickets SET status = 'Open', resolved_at = NULL, closed_at = NULL WHERE id = ?",
+      [current.id],
+    );
+    await connection.execute(
+      `INSERT INTO ticket_updates
+        (ticket_id, user_id, note, old_status, new_status, visible_to_requester)
+       VALUES (?, ?, ?, 'Closed', 'Open', FALSE)`,
+      [current.id, request.user.id, `Ticket reopened. Reason: ${reason}`],
+    );
+    if (current.requester_user_id !== null) {
+      await connection.execute(
+        `INSERT INTO notifications (user_id, ticket_id, actor_user_id, title, message)
+         VALUES (?, ?, ?, 'Ticket reopened', ?)`,
+        [current.requester_user_id, current.id, request.user.id, `${current.ticket_no}: Ticket reopened.`],
+      );
+    }
+    await connection.commit();
+    await queueTicketUpdate({
+      ticketId: current.id,
+      email: current.requester_email,
+      status: "Open",
+      assignedName: current.assigned_name,
+      statusChanged: true,
+    });
+    response.json({ message: "Ticket reopened and recorded." });
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+});
+
 router.post("/:ticketNo/link-device", async (request, response) => {
   const ticketNo = request.params.ticketNo.toUpperCase();
   const body = request.body || {};
@@ -455,12 +659,17 @@ router.post("/:ticketNo/link-device", async (request, response) => {
   try {
     await connection.beginTransaction();
     const [tickets] = await connection.execute(
-      "SELECT id, device_id FROM tickets WHERE ticket_no = ? FOR UPDATE",
+      "SELECT id, device_id, status FROM tickets WHERE ticket_no = ? FOR UPDATE",
       [ticketNo],
     );
     if (!tickets.length) {
       await connection.rollback();
       response.status(404).json({ message: "Ticket not found." });
+      return;
+    }
+    if (tickets[0].status === "Closed") {
+      await connection.rollback();
+      response.status(409).json({ message: "Closed tickets cannot be edited. An admin must reopen the ticket first." });
       return;
     }
     if (tickets[0].device_id) {

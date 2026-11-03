@@ -580,12 +580,17 @@ router.post("/", async (request, response) => {
     let ticket = null;
     if (ticketNoValue) {
       const [tickets] = await connection.execute(
-        "SELECT id, device_id FROM tickets WHERE ticket_no = ? FOR UPDATE",
+        "SELECT id, device_id, status FROM tickets WHERE ticket_no = ? FOR UPDATE",
         [ticketNoValue],
       );
       if (!tickets.length) {
         await connection.rollback();
         response.status(404).json({ message: "Ticket not found." });
+        return;
+      }
+      if (tickets[0].status === "Closed") {
+        await connection.rollback();
+        response.status(409).json({ message: "Closed tickets cannot be edited. An admin must reopen the ticket first." });
         return;
       }
       if (tickets[0].device_id) {

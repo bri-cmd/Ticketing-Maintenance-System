@@ -158,8 +158,10 @@ batched for one minute; internal notes are never included. Resolutions use a
 separate resolution message. The email link uses `APP_BASE_URL`.
 
 Tickets use the source labels `Online` and `Walk-in`, and the active statuses
-`Open`, `In Progress`, `Resolved`, and `Closed`. Migrations normalize older
-source/status values while retaining historical ticket updates.
+`Open`, `In Progress`, `Resolved`, and `Closed`. Resolved tickets stay in the
+queue until staff close them; closed tickets remain available in Ticket History.
+Only admins can reopen a closed ticket, with a recorded reason. Migrations
+normalize older source/status values while retaining historical ticket updates.
 
 ## 6. Build and start
 

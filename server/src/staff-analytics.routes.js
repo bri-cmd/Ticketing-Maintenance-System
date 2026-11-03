@@ -78,12 +78,12 @@ async function getScheduleSummary(departmentId) {
 router.get("/dashboard", async (_request, response) => {
   const [[ticketCounts]] = await pool.query(
     `SELECT
-       SUM(status IN ('Open', 'In Progress')) AS open_tickets,
-       SUM(
-         resolved_at >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
-         AND resolved_at < DATE_ADD(DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY), INTERVAL 7 DAY)
-       ) AS resolved_this_week
-     FROM tickets`,
+       COALESCE(SUM(status = 'Open'), 0) AS open_tickets,
+         COALESCE(SUM(status = 'In Progress'), 0) AS in_progress_tickets,
+         COALESCE(SUM(status = 'Resolved'), 0) AS resolved_tickets,
+         COALESCE(SUM(status = 'Closed'), 0) AS closed_tickets,
+         COALESCE(SUM(status <> 'Closed'), 0) AS pending_tickets
+       FROM tickets`,
   );
   const [[deviceCounts]] = await pool.query(
     `SELECT
@@ -109,12 +109,14 @@ router.get("/dashboard", async (_request, response) => {
   );
   const [recentRows] = await pool.query(
     `SELECT ticket.ticket_no, ticket.summary, ticket.status, ticket.priority, ticket.source,
+            ticket.assigned_to,
             COALESCE(requester.full_name, ticket.guest_name, 'Employee') AS requester_name,
             department.name AS department,
             DATE_FORMAT(ticket.created_at, '%Y-%m-%d %H:%i:%s') AS submitted_at
      FROM tickets ticket
      LEFT JOIN users requester ON requester.id = ticket.requester_user_id
      LEFT JOIN departments department ON department.id = ticket.department_id
+     WHERE ticket.status <> 'Closed'
      ORDER BY ticket.created_at DESC, ticket.id DESC
      LIMIT 5`,
   );
@@ -141,7 +143,10 @@ router.get("/dashboard", async (_request, response) => {
   response.json({
     metrics: {
       openTickets: Number(ticketCounts.open_tickets || 0),
-      resolvedThisWeek: Number(ticketCounts.resolved_this_week || 0),
+      inProgressTickets: Number(ticketCounts.in_progress_tickets || 0),
+      resolvedTickets: Number(ticketCounts.resolved_tickets || 0),
+      closedTickets: Number(ticketCounts.closed_tickets || 0),
+      pendingTickets: Number(ticketCounts.pending_tickets || 0),
       overdueMaintenance: Number(deviceCounts.overdue || 0),
       maintenanceDueThisWeek: Number(deviceCounts.due_this_week || 0),
       onSchedulePercent: active ? Math.round((Number(deviceCounts.on_schedule || 0) / active) * 100) : 0,
@@ -154,6 +159,7 @@ router.get("/dashboard", async (_request, response) => {
       status: ticket.status,
       priority: ticket.priority,
       source: ticket.source,
+      assignedTo: ticket.assigned_to,
       submittedAt: ticket.submitted_at,
     })),
     maintenanceAttention: attentionRows.map((device) => ({
@@ -191,6 +197,7 @@ router.get("/reports", async (request, response) => {
   const [[ticketSummary]] = await pool.execute(
     `SELECT SUM(ticket.created_at >= ? AND ticket.created_at < ?) AS received,
             SUM(ticket.resolved_at >= ? AND ticket.resolved_at < ?) AS resolved,
+            SUM(ticket.closed_at >= ? AND ticket.closed_at < ?) AS closed,
             AVG(
               CASE
                 WHEN ticket.resolved_at >= ? AND ticket.resolved_at < ?
@@ -203,12 +210,15 @@ router.get("/reports", async (request, response) => {
        AND (
          (ticket.created_at >= ? AND ticket.created_at < ?)
          OR (ticket.resolved_at >= ? AND ticket.resolved_at < ?)
+         OR (ticket.closed_at >= ? AND ticket.closed_at < ?)
        )`,
     [
       filters.start, filters.end,
       filters.start, filters.end,
       filters.start, filters.end,
+      filters.start, filters.end,
       filters.departmentId, filters.departmentId,
+      filters.start, filters.end,
       filters.start, filters.end,
       filters.start, filters.end,
     ],
@@ -236,6 +246,7 @@ router.get("/reports", async (request, response) => {
     summary: {
       ticketsReceived: Number(ticketSummary.received || 0),
       ticketsResolved: Number(ticketSummary.resolved || 0),
+      ticketsClosed: Number(ticketSummary.closed || 0),
       averageResolutionMinutes: ticketSummary.average_resolution_minutes === null
         ? null
         : Number(ticketSummary.average_resolution_minutes),
@@ -249,8 +260,18 @@ router.get("/reports", async (request, response) => {
 router.get("/reports/tickets.csv", requireRole("admin"), async (request, response) => {
   const filters = getReportFilters(request, response);
   if (!filters) return;
-  const conditions = ["ticket.created_at >= ?", "ticket.created_at < ?"];
-  const values = [filters.start, filters.end];
+  const conditions = [
+    `(
+      (ticket.created_at >= ? AND ticket.created_at < ?)
+      OR (ticket.resolved_at >= ? AND ticket.resolved_at < ?)
+      OR (ticket.closed_at >= ? AND ticket.closed_at < ?)
+    )`,
+  ];
+  const values = [
+    filters.start, filters.end,
+    filters.start, filters.end,
+    filters.start, filters.end,
+  ];
   if (filters.departmentId !== null) {
     conditions.push("ticket.department_id = ?");
     values.push(filters.departmentId);
@@ -263,6 +284,7 @@ router.get("/reports/tickets.csv", requireRole("admin"), async (request, respons
             department.name AS department, device.asset_tag AS asset_tag,
             DATE_FORMAT(ticket.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
             DATE_FORMAT(ticket.resolved_at, '%Y-%m-%d %H:%i:%s') AS resolved_at,
+            DATE_FORMAT(ticket.closed_at, '%Y-%m-%d %H:%i:%s') AS closed_at,
             assigned.full_name AS assigned_to
      FROM tickets ticket
      LEFT JOIN users requester ON requester.id = ticket.requester_user_id
@@ -276,11 +298,11 @@ router.get("/reports/tickets.csv", requireRole("admin"), async (request, respons
   csvResponse(response, `tickets-${filters.month}.csv`, [
     "Ticket number", "Requester", "Email", "Department", "Device asset tag",
     "Help topic", "Subject", "Details", "Priority", "Source", "Status",
-    "Assigned to", "Submitted at", "Resolved at",
+    "Assigned to", "Submitted at", "Resolved at", "Closed at",
   ], rows.map((row) => [
     row.ticket_no, row.requester_name, row.requester_email, row.department, row.asset_tag,
     row.help_topic, row.summary, row.details, row.priority, row.source, row.status,
-    row.assigned_to, row.created_at, row.resolved_at,
+    row.assigned_to, row.created_at, row.resolved_at, row.closed_at,
   ]));
 });
 
