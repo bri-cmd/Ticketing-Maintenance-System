@@ -1,6 +1,7 @@
 const express = require("express");
 const { pool } = require("./db");
 const { notifyTicketCreated } = require("./ticket-notifications");
+const { queueTicketReceived, queueTicketUpdate } = require("./mail-queue");
 const {
   requirePasswordChangeComplete,
   requireRole,
@@ -196,7 +197,8 @@ router.get("/:ticketNo", async (request, response) => {
     `SELECT t.id, t.ticket_no, t.guest_name, t.guest_email, t.help_topic,
             t.summary, t.details, t.priority, t.source, t.status, t.device_text,
             DATE_FORMAT(t.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
-            requester.full_name AS requester_name, requester.email AS requester_email,
+            requester.full_name AS requester_name,
+            COALESCE(t.requester_email, requester.email) AS requester_email,
             department.name AS department,
             d.id AS device_id, d.asset_tag, d.type AS device_type, d.brand, d.model,
             DATE_FORMAT(d.last_serviced, '%Y-%m-%d') AS last_serviced,
@@ -304,7 +306,12 @@ router.patch("/:ticketNo", async (request, response) => {
   try {
     await connection.beginTransaction();
     const [tickets] = await connection.execute(
-      "SELECT id, ticket_no, requester_user_id, status, assigned_to FROM tickets WHERE ticket_no = ? FOR UPDATE",
+      `SELECT ticket.id, ticket.ticket_no, ticket.requester_user_id, ticket.status,
+              ticket.assigned_to,
+              COALESCE(ticket.requester_email, ticket.guest_email, requester.email) AS requester_email
+       FROM tickets ticket
+       LEFT JOIN users requester ON requester.id = ticket.requester_user_id
+       WHERE ticket.ticket_no = ? FOR UPDATE`,
       [ticketNo],
     );
     if (!tickets.length) {
@@ -328,6 +335,7 @@ router.patch("/:ticketNo", async (request, response) => {
     const statusChanged = current.status !== status;
     const assignmentChanged = Number(current.assigned_to) !== assignedTo
       && !(current.assigned_to === null && assignedTo === null);
+    let assignedName = null;
     const auditParts = [];
     if (statusChanged) auditParts.push(`Status changed from ${current.status} to ${status}.`);
     if (assignmentChanged) {
@@ -338,8 +346,16 @@ router.patch("/:ticketNo", async (request, response) => {
           "SELECT full_name FROM users WHERE id = ?",
           [assignedTo],
         );
-        auditParts.push(`Assigned to ${assignees[0].full_name}.`);
+        assignedName = assignees[0].full_name;
+        auditParts.push(`Assigned to ${assignedName}.`);
       }
+    }
+    if (assignedTo !== null && assignedName === null) {
+      const [assignees] = await connection.execute(
+        "SELECT full_name FROM users WHERE id = ?",
+        [assignedTo],
+      );
+      assignedName = assignees[0]?.full_name || null;
     }
     if (!auditParts.length) {
       if (!note) {
@@ -407,6 +423,16 @@ router.patch("/:ticketNo", async (request, response) => {
       );
     }
     await connection.commit();
+    if (statusChanged || assignmentChanged || (note && visibleToRequester)) {
+      await queueTicketUpdate({
+        ticketId: current.id,
+        email: current.requester_email,
+        status,
+        assignedName,
+        statusChanged: statusChanged || assignmentChanged,
+        visibleNote: visibleToRequester ? note : null,
+      });
+    }
     response.json({ message: "Ticket updated." });
   } catch (error) {
     await connection.rollback();
@@ -536,6 +562,7 @@ router.post("/walk-in", async (request, response) => {
     await connection.beginTransaction();
     let guestName = fullName || null;
     let requesterName = guestName;
+    let requesterEmail = requesterUserId === null ? (guestEmail || null) : null;
     let departmentId = departmentIdInput;
     let deviceId = null;
     let deviceText = null;
@@ -553,6 +580,7 @@ router.post("/walk-in", async (request, response) => {
       }
       guestName = null;
       requesterName = employees[0].full_name;
+      requesterEmail = employees[0].email;
       departmentId = employees[0].department_id;
       if (!["computer", "printer", "other"].includes(deviceChoice)) {
         await connection.rollback();
@@ -656,14 +684,15 @@ router.post("/walk-in", async (request, response) => {
     const ticketNo = `IT-${String(Number(numberRows[0].last_number) + 1).padStart(4, "0")}`;
     const [insertResult] = await connection.execute(
       `INSERT INTO tickets
-        (ticket_no, requester_user_id, guest_name, guest_email, department_id,
+        (ticket_no, requester_user_id, guest_name, guest_email, requester_email, department_id,
          device_id, device_text, help_topic, summary, details, priority, source, assigned_to)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Walk-in', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Walk-in', ?)`,
       [
         ticketNo,
         requesterUserId,
         guestName,
         requesterUserId === null ? (guestEmail || null) : null,
+        requesterEmail,
         departmentId,
         deviceId,
         deviceText,
@@ -688,6 +717,10 @@ router.post("/walk-in", async (request, response) => {
       ],
     );
     await connection.commit();
+    await queueTicketReceived({
+      ticketId: insertResult.insertId,
+      email: requesterEmail,
+    });
     await notifyTicketCreated({
       ticketId: insertResult.insertId,
       ticketNo,

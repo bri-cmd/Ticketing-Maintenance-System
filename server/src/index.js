@@ -13,6 +13,7 @@ const staffDeviceRoutes = require("./staff-devices.routes");
 const staffAnalyticsRoutes = require("./staff-analytics.routes");
 const maintenancePlanRoutes = require("./maintenance-plans.routes");
 const { checkMysqldump, scheduleDailyBackup } = require("./backup");
+const { startMailQueue } = require("./mail-queue");
 const avatarDirectory = path.resolve(__dirname, "../uploads/avatars");
 
 const app = express();
@@ -70,6 +71,7 @@ async function start() {
     getJwtSecret();
     await testConnection();
     console.log("MySQL connection successful.");
+    startMailQueue();
     const backupTool = await checkMysqldump();
     if (backupTool.available) {
       scheduleDailyBackup();

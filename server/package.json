@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "db:test": "node src/test-db.js",
-    "db:seed": "node ../database/seed.js"
+    "db:seed": "node ../database/seed.js",
+    "mail:test": "node src/mail-test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
@@ -15,6 +16,7 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.5.0",
-    "mysql2": "^3.15.2"
+    "mysql2": "^3.15.2",
+    "nodemailer": "^10.3.1"
   }
 }

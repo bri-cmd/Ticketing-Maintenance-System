@@ -96,7 +96,7 @@ npm.cmd run db:migrate
 The migration runner applies pending files in filename order and records each
 success in `schema_migrations`. Do not baseline a database that is missing
 schema changes from any existing migration. A new numbered SQL migration is
-not required for stage (e): it adds no database tables or columns.
+required when a change adds database tables or columns.
 
 Seed initial departments, plans, sample devices, and accounts once:
 
@@ -112,7 +112,52 @@ If a future migration needs schema privileges, grant the configured migration
 user the required privileges before running `npm.cmd run db:migrate`. Keep
 database administrator credentials out of application source files and logs.
 
-## 5. Build and start
+## 5. Configure requester email
+
+Apply pending migrations, including the mail queue and mail history tables:
+
+```powershell
+npm.cmd run db:migrate
+```
+
+Set these values in `server/.env` to enable SMTP delivery:
+
+```text
+APP_BASE_URL=http://<server-ip>:3000
+SMTP_HOST=<smtp-server>
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=<smtp-username>
+SMTP_PASSWORD=<smtp-password>
+MAIL_FROM=<service-desk-sender-address>
+```
+
+Use `SMTP_SECURE=true` for an SMTP server requiring implicit TLS (commonly port
+465). If SMTP is not configured, the application writes the complete email to
+the server console and records the attempt as `logged` in `mail_log`; these
+messages can contain requester information, so protect server logs accordingly.
+Delivery attempts are recorded as `sent` or `failed`. Check with the email
+administrator before enabling delivery: verify the sender, message templates,
+public-submission policy, and the intended visibility of requester emails.
+
+`ALLOWED_EMAIL_DOMAINS` is optional and accepts comma-separated domains, such as
+`example.com, partner.example`. Leave it blank to allow any domain. When set, it
+is enforced only on public guest ticket submissions; signed-in employee and
+staff workflows are unchanged. Public guest submissions are limited to five
+per hour for each source IP and normalized email address.
+
+Test the SMTP configuration by sending a test message:
+
+```powershell
+npm.cmd run mail:test -- recipient@example.com
+```
+
+Ticket receipt emails are queued after a guest, employee, or walk-in ticket is
+created. Staff status, assignment, and requester-visible note updates are
+batched for one minute; internal notes are never included. Resolutions use a
+separate resolution message. The email link uses `APP_BASE_URL`.
+
+## 6. Build and start
 
 Build the client and start the application:
 

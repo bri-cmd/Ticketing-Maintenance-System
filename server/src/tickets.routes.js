@@ -1,6 +1,8 @@
 const express = require("express");
 const { pool } = require("./db");
 const { notifyTicketCreated } = require("./ticket-notifications");
+const { queueTicketReceived } = require("./mail-queue");
+const { checkPublicSubmissionLimit } = require("./public-submission-limits");
 const { requirePasswordChangeComplete, requireUser } = require("./auth");
 
 const router = express.Router();
@@ -112,14 +114,15 @@ async function createTicket(ticketData) {
     const ticketNo = `IT-${String(Number(numberRows[0].last_number) + 1).padStart(4, "0")}`;
     const [insertResult] = await connection.execute(
       `INSERT INTO tickets
-        (ticket_no, requester_user_id, guest_name, guest_email, department_id,
+        (ticket_no, requester_user_id, guest_name, guest_email, requester_email, department_id,
          device_id, device_text, help_topic, summary, details, priority, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         ticketNo,
         ticketData.requesterUserId,
         ticketData.guestName,
         ticketData.guestEmail,
+        ticketData.requesterEmail,
         ticketData.departmentId,
         ticketData.deviceId,
         ticketData.deviceText,
@@ -137,6 +140,10 @@ async function createTicket(ticketData) {
       [insertResult.insertId, "Your request has been submitted."],
     );
     await connection.commit();
+    await queueTicketReceived({
+      ticketId: insertResult.insertId,
+      email: ticketData.requesterEmail,
+    });
     await notifyTicketCreated({
       ticketId: insertResult.insertId,
       ticketNo,
@@ -158,12 +165,6 @@ async function createTicket(ticketData) {
       connection.release();
     }
   }
-}
-
-function logConfirmationEmail(ticketNo, email) {
-  console.log(
-    `[Ticket confirmation email - SMTP not configured]\nTo: ${email}\nSubject: BMC IT Support request ${ticketNo}\nYour support request was received. Your ticket number is ${ticketNo}. Use this number and your email address to check its status.`,
-  );
 }
 
 router.get("/departments", async (_request, response) => {
@@ -188,6 +189,17 @@ router.post("/guest", async (request, response) => {
 
   if (!validEmail.test(email) || email.length > 254) {
     response.status(400).json({ message: "Enter a valid email address." });
+    return;
+  }
+  const allowedDomains = (process.env.ALLOWED_EMAIL_DOMAINS || "")
+    .split(",")
+    .map((domain) => domain.trim().toLowerCase().replace(/^@/, ""))
+    .filter(Boolean);
+  const emailDomain = email.slice(email.lastIndexOf("@") + 1);
+  if (allowedDomains.length && !allowedDomains.includes(emailDomain)) {
+    response.status(400).json({
+      message: `Use an email address from an approved domain: ${allowedDomains.join(", ")}.`,
+    });
     return;
   }
   if (!fullName || !Number.isInteger(departmentId) || departmentId < 1) {
@@ -239,10 +251,17 @@ router.post("/guest", async (request, response) => {
     }
   }
 
+  const limitError = checkPublicSubmissionLimit({ ip: request.ip, email });
+  if (limitError) {
+    response.status(429).json({ message: limitError });
+    return;
+  }
+
   const ticketNo = await createTicket({
     requesterUserId: null,
     guestName: fullName,
     guestEmail: email,
+    requesterEmail: email,
     departmentId,
     deviceId,
     deviceText: unmatchedDeviceText,
@@ -252,7 +271,6 @@ router.post("/guest", async (request, response) => {
     priority: "Normal",
     source: "Guest",
   });
-  logConfirmationEmail(ticketNo, email);
   response.status(201).json({ ticketNo });
 });
 
@@ -391,6 +409,7 @@ router.post(
       requesterUserId: request.user.id,
       guestName: null,
       guestEmail: null,
+      requesterEmail: request.user.email,
       departmentId: request.user.department_id,
       deviceId,
       deviceText,
@@ -400,7 +419,6 @@ router.post(
       priority,
       source: "Signed in",
     });
-    logConfirmationEmail(ticketNo, request.user.email);
     response.status(201).json({ ticketNo });
   },
 );
