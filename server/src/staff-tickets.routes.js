@@ -10,9 +10,9 @@ const {
 } = require("./auth");
 
 const router = express.Router();
-const statuses = new Set(["Open", "In progress", "Waiting for parts", "Resolved", "Closed"]);
+const statuses = new Set(["Open", "In Progress", "Resolved", "Closed"]);
 const priorities = new Set(["Low", "Normal", "High", "Urgent"]);
-const sources = new Set(["Guest", "Online", "Signed in", "Walk-in"]);
+const sources = new Set(["Online", "Walk-in"]);
 const ticketNumberPattern = /^IT-\d{4,}$/i;
 
 router.use(requireUser, requirePasswordChangeComplete, requireRole("technician", "admin"));
@@ -58,7 +58,7 @@ router.get("/", async (request, response) => {
 
   const [rows] = await pool.execute(
     `SELECT t.ticket_no, t.summary, t.status, t.priority, t.source,
-            COALESCE(requester.full_name, t.guest_name, 'Guest') AS requester_name,
+            COALESCE(requester.full_name, t.guest_name, 'Employee') AS requester_name,
             department.name AS department,
             d.id AS device_id, d.asset_tag, t.device_text,
             DATE_FORMAT(t.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
@@ -233,8 +233,8 @@ router.get("/:ticketNo", async (request, response) => {
     ticket: {
       id: ticket.id,
       ticketNo: ticket.ticket_no,
-      requesterName: ticket.requester_name || ticket.guest_name || "Guest",
-      requesterType: ticket.requester_name || ticket.source !== "Guest" ? "Employee" : "Guest",
+      requesterName: ticket.requester_name || ticket.guest_name || "Employee",
+      requesterType: "Employee",
       requesterEmail: ticket.requester_email || ticket.guest_email,
       department: ticket.department,
       device: ticket.device_id
@@ -505,10 +505,37 @@ router.post("/:ticketNo/link-device", async (request, response) => {
 });
 
 router.post("/walk-in", async (request, response) => {
-  const parsed = parseTicketRequest(request.body || {});
+  const body = request.body || {};
+  const parsed = parseTicketRequest(body);
   if (parsed.error) {
     response.status(400).json({ message: parsed.error });
     return;
+  }
+  const priority = body.priority || "Normal";
+  if (!priorities.has(priority)) {
+    response.status(400).json({ message: "Choose a valid ticket priority." });
+    return;
+  }
+  const assignedTo = body.assignedTo === undefined
+    ? Number(request.user.id)
+    : body.assignedTo === "" || body.assignedTo === null
+      ? null
+      : Number(body.assignedTo);
+  if (assignedTo !== null && (!Number.isInteger(assignedTo) || assignedTo < 1)) {
+    response.status(400).json({ message: "Choose an active admin or technician to assign this ticket to." });
+    return;
+  }
+  if (assignedTo !== null) {
+    const [assignees] = await pool.execute(
+      `SELECT id
+       FROM users
+       WHERE id = ? AND role IN ('admin', 'technician') AND active = TRUE`,
+      [assignedTo],
+    );
+    if (!assignees.length) {
+      response.status(400).json({ message: "Choose an active admin or technician to assign this ticket to." });
+      return;
+    }
   }
   const fields = parsed.fields;
   const resolvedDevice = await resolveTicketDevice(pool, fields);
@@ -528,9 +555,9 @@ router.post("/walk-in", async (request, response) => {
     helpTopic: fields.helpTopic,
     summary: fields.summary,
     details: fields.details,
-    priority: "Normal",
+    priority,
     source: "Walk-in",
-    assignedTo: request.user.id,
+    assignedTo,
     createdByUserId: request.user.id,
     actorUserId: request.user.id,
     initialNote: `Walk-in ticket created for ${fields.fullName}.`,

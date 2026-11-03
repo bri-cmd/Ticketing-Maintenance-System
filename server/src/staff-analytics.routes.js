@@ -78,7 +78,7 @@ async function getScheduleSummary(departmentId) {
 router.get("/dashboard", async (_request, response) => {
   const [[ticketCounts]] = await pool.query(
     `SELECT
-       SUM(status IN ('Open', 'In progress', 'Waiting for parts')) AS open_tickets,
+       SUM(status IN ('Open', 'In Progress')) AS open_tickets,
        SUM(
          resolved_at >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
          AND resolved_at < DATE_ADD(DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY), INTERVAL 7 DAY)
@@ -109,7 +109,7 @@ router.get("/dashboard", async (_request, response) => {
   );
   const [recentRows] = await pool.query(
     `SELECT ticket.ticket_no, ticket.summary, ticket.status, ticket.priority, ticket.source,
-            COALESCE(requester.full_name, ticket.guest_name, 'Guest') AS requester_name,
+            COALESCE(requester.full_name, ticket.guest_name, 'Employee') AS requester_name,
             department.name AS department,
             DATE_FORMAT(ticket.created_at, '%Y-%m-%d %H:%i:%s') AS submitted_at
      FROM tickets ticket
@@ -258,7 +258,7 @@ router.get("/reports/tickets.csv", requireRole("admin"), async (request, respons
   const [rows] = await pool.execute(
     `SELECT ticket.ticket_no, ticket.summary, ticket.details, ticket.help_topic,
             ticket.priority, ticket.source, ticket.status, ticket.guest_email,
-            COALESCE(requester.full_name, ticket.guest_name, 'Guest') AS requester_name,
+            COALESCE(requester.full_name, ticket.guest_name, 'Employee') AS requester_name,
             COALESCE(requester.email, ticket.guest_email) AS requester_email,
             department.name AS department, device.asset_tag AS asset_tag,
             DATE_FORMAT(ticket.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,

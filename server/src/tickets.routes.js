@@ -7,7 +7,7 @@ const { requirePasswordChangeComplete, requireUser } = require("./auth");
 
 const router = express.Router();
 const validTicketNumber = /^IT-\d{4,}$/i;
-const publicStatuses = ["Submitted", "Received", "Assigned", "In repair", "Resolved"];
+const publicStatuses = ["Open", "In Progress", "Resolved", "Closed"];
 const helpTopics = new Set([
   "Hardware",
   "Software",
@@ -25,13 +25,7 @@ function textField(value, maxLength) {
 }
 
 function statusStep(ticket) {
-  if (ticket.status === "Resolved" || ticket.status === "Closed") return "Resolved";
-  if (ticket.status === "Waiting for parts") return "In repair";
-  if (ticket.status === "In progress") {
-    return ticket.assigned_to ? "In repair" : "Received";
-  }
-  if (ticket.assigned_to) return "Assigned";
-  return "Submitted";
+  return ticket.status;
 }
 
 function publicTicket(ticket) {
@@ -162,7 +156,7 @@ router.post("/guest-status", async (request, response) => {
   const ticket = await getTicketForTracking(
     pool,
     `t.ticket_no = ? AND LOWER(COALESCE(t.requester_email, t.guest_email)) = ?
-     AND t.source IN ('Guest', 'Online', 'Walk-in')`,
+     AND t.source IN ('Online', 'Walk-in')`,
     [ticketNo, email],
   );
   if (!ticket) {
@@ -290,7 +284,7 @@ router.post(
       summary,
       details,
       priority,
-      source: "Signed in",
+      source: "Online",
     });
     response.status(201).json({ ticketNo });
   },

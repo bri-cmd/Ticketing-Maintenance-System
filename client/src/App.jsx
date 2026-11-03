@@ -59,6 +59,104 @@ function AuthProvider({ children }) {
   );
 }
 
+function TicketRequesterIssueFields({
+  departments,
+  form,
+  onChange,
+  onDeviceChange,
+  selectedDevice,
+}) {
+  const departmentName = departments.find(
+    (department) => String(department.id) === form.departmentId,
+  )?.name || "";
+
+  return (
+    <>
+      <h2>Contact Information</h2>
+      <div className="guest-contact-grid">
+        <label className="guest-email-field">
+          Email Address
+          <input
+            maxLength={254}
+            onChange={(event) => onChange("email", event.target.value)}
+            required
+            type="email"
+            value={form.email}
+          />
+        </label>
+        <PublicDevicePicker
+          departmentId={form.departmentId}
+          departmentName={departmentName}
+          deviceText={form.device}
+          onDeviceChange={onDeviceChange}
+          onDeviceTextChange={(value) => onChange("device", value)}
+          selectedDevice={selectedDevice}
+        />
+        <TextField
+          label="Full Name"
+          value={form.fullName}
+          onChange={(value) => onChange("fullName", value)}
+          maxLength={150}
+          required
+        />
+        <label>
+          Department
+          <select
+            onChange={(event) => {
+              onChange("departmentId", event.target.value);
+              onDeviceChange(null);
+              onChange("device", "");
+            }}
+            required
+            value={form.departmentId}
+          >
+            <option value="">Choose a department</option>
+            {departments.map((department) => (
+              <option key={department.id} value={department.id}>{department.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Help Topic
+          <select
+            onChange={(event) => onChange("helpTopic", event.target.value)}
+            required
+            value={form.helpTopic}
+          >
+            <option value="">Choose a help topic</option>
+            {helpTopicOptions.map((topic) => (
+              <option key={topic} value={topic}>{topic}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <hr />
+      <h2>Ticket Details</h2>
+      <p className="muted">Please describe your issue</p>
+      <div className="guest-ticket-details">
+        <TextField
+          label="Issue Summary"
+          value={form.summary}
+          onChange={(value) => onChange("summary", value)}
+          maxLength={200}
+          required
+        />
+        <label>
+          Details
+          <textarea
+            maxLength={10000}
+            onChange={(event) => onChange("details", event.target.value)}
+            placeholder="Details on the reasons for opening the ticket"
+            required
+            rows={10}
+            value={form.details}
+          />
+        </label>
+      </div>
+    </>
+  );
+}
+
 function useAuth() {
   return useContext(AuthContext);
 }
@@ -557,9 +655,7 @@ function NotificationPanel({
               const actorDepartment = typeof notification?.actorDepartment === "string"
                 ? notification.actorDepartment.trim()
                 : "";
-              const actorMeta = notification?.actorType === "guest"
-                ? `Guest - ${actorName}`
-                : notification?.actorType === "employee"
+              const actorMeta = notification?.actorType === "employee"
                   ? `Employee - ${actorName}`
                 : notification?.actorType === "system"
                   ? "System"
@@ -1074,75 +1170,13 @@ function GuestTicketPage() {
         <h1>Open a New Ticket</h1>
         <p className="muted">Employees can submit an IT request here without signing in.</p>
         <form onSubmit={submit}>
-          <h2>Contact Information</h2>
-          <div className="guest-contact-grid">
-            <label className="guest-email-field">
-              Email Address
-              <input
-                maxLength={254}
-                onChange={(event) => updateForm("email", event.target.value)}
-                required
-                type="email"
-                value={form.email}
-              />
-            </label>
-            <PublicDevicePicker
-              departmentId={form.departmentId}
-              departmentName={departments.find((department) => String(department.id) === form.departmentId)?.name || ""}
-              deviceText={form.device}
-              onDeviceChange={setSelectedDevice}
-              onDeviceTextChange={(value) => updateForm("device", value)}
-              selectedDevice={selectedDevice}
-            />
-            <TextField label="Full Name" value={form.fullName} onChange={(value) => updateForm("fullName", value)} maxLength={150} required />
-            <label>
-              Department
-              <select
-                onChange={(event) => {
-                  updateForm("departmentId", event.target.value);
-                  setSelectedDevice(null);
-                  updateForm("device", "");
-                }}
-                required
-                value={form.departmentId}
-              >
-                <option value="">Choose a department</option>
-                {departments.map((department) => (
-                  <option key={department.id} value={department.id}>{department.name}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Help Topic
-              <select
-                onChange={(event) => updateForm("helpTopic", event.target.value)}
-                required
-                value={form.helpTopic}
-              >
-                <option value="">Choose a help topic</option>
-                {helpTopicOptions.map((topic) => (
-                  <option key={topic} value={topic}>{topic}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <hr />
-          <h2>Ticket Details</h2>
-          <p className="muted">Please describe your issue</p>
-          <div className="guest-ticket-details">
-            <TextField label="Issue Summary" value={form.summary} onChange={(value) => updateForm("summary", value)} maxLength={200} required />
-            <label>
-              Details
-              <textarea
-                maxLength={10000}
-                onChange={(event) => updateForm("details", event.target.value)}
-                placeholder="Details on the reasons for opening the ticket"
-                required
-                rows={10}
-                value={form.details}
-              />
-            </label>
-          </div>
+          <TicketRequesterIssueFields
+            departments={departments}
+            form={form}
+            onChange={updateForm}
+            onDeviceChange={setSelectedDevice}
+            selectedDevice={selectedDevice}
+          />
           <FormError message={error} />
           <div className="form-actions">
             <button className="button button-primary" disabled={saving || loading}>
@@ -1239,7 +1273,7 @@ function TicketStatusForm() {
 }
 
 function TicketProgress({ ticket }) {
-  const steps = ["Submitted", "Received", "Assigned", "In repair", "Resolved"];
+  const steps = ["Open", "In Progress", "Resolved", "Closed"];
   return (
     <div
       className="ticket-progress"
@@ -2209,11 +2243,7 @@ function TicketQueuePage() {
           Source
           <select onChange={(event) => setSource(event.target.value)} value={source}>
             <option value="All">All sources</option>
-            {["Online", "Guest", "Signed in", "Walk-in"].map((value) => (
-              <option key={value} value={value}>
-                {value === "Guest" ? "Guest (historical)" : value}
-              </option>
-            ))}
+            {["Online", "Walk-in"].map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
         </label>
       </div>
@@ -2260,7 +2290,7 @@ function TicketQueuePage() {
   );
 }
 
-const ticketStatuses = ["Open", "In progress", "Waiting for parts", "Resolved", "Closed"];
+const ticketStatuses = ["Open", "In Progress", "Resolved", "Closed"];
 
 function TicketDetailPage() {
   const { ticketNo } = useParams();
@@ -3576,9 +3606,13 @@ function MaintenancePlanEditorPage() {
 }
 
 function WalkInTicketPage() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [departments, setDepartments] = useState([]);
+  const [assignees, setAssignees] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState(null);
+  const [priority, setPriority] = useState("Normal");
+  const [assignedTo, setAssignedTo] = useState("");
   const [form, setForm] = useState({
     email: "",
     device: "",
@@ -3593,11 +3627,18 @@ function WalkInTicketPage() {
   const [lookupsLoading, setLookupsLoading] = useState(true);
 
   useEffect(() => {
-    api("/api/tickets/departments")
-      .then(({ departments: values }) => setDepartments(values))
+    Promise.all([
+      api("/api/tickets/departments"),
+      api("/api/staff/tickets/lookups"),
+    ])
+      .then(([{ departments: departmentValues }, { assignees: assigneeValues }]) => {
+        setDepartments(departmentValues);
+        setAssignees(assigneeValues);
+        setAssignedTo(String(user.id));
+      })
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLookupsLoading(false));
-  }, []);
+  }, [user.id]);
 
   function updateForm(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -3614,6 +3655,8 @@ function WalkInTicketPage() {
           ...form,
           deviceId: selectedDevice?.id || "",
           departmentId: Number(form.departmentId),
+          priority,
+          assignedTo,
         }),
       });
       navigate(`/staff/tickets/${result.ticketNo}`);
@@ -3630,77 +3673,35 @@ function WalkInTicketPage() {
       <h1>New walk-in ticket</h1>
       <p className="muted">Enter the employee's request details as provided in person.</p>
       <form className="walk-in-form employee-request-form" onSubmit={submit}>
-        <section className="request-contact">
-          <h2>Contact Information</h2>
-          <div className="guest-contact-grid">
-            <label className="guest-email-field">
-              Email Address
-              <input
-                maxLength={254}
-                onChange={(event) => updateForm("email", event.target.value)}
-                required
-                type="email"
-                value={form.email}
-              />
-            </label>
-            <PublicDevicePicker
-              departmentId={form.departmentId}
-              departmentName={departments.find((department) => String(department.id) === form.departmentId)?.name || ""}
-              deviceText={form.device}
-              onDeviceChange={setSelectedDevice}
-              onDeviceTextChange={(value) => updateForm("device", value)}
-              selectedDevice={selectedDevice}
-            />
-            <TextField label="Full Name" value={form.fullName} onChange={(value) => updateForm("fullName", value)} maxLength={150} required />
+        <TicketRequesterIssueFields
+          departments={departments}
+          form={form}
+          onChange={updateForm}
+          onDeviceChange={setSelectedDevice}
+          selectedDevice={selectedDevice}
+        />
+        <section className="request-section walk-in-it-fields">
+          <div className="walk-in-it-grid">
             <label>
-              Department
-              <select
-                onChange={(event) => {
-                  updateForm("departmentId", event.target.value);
-                  setSelectedDevice(null);
-                  updateForm("device", "");
-                }}
-                required
-                value={form.departmentId}
-              >
-                <option value="">Choose a department</option>
-                {departments.map((department) => (
-                  <option key={department.id} value={department.id}>{department.name}</option>
+              Priority
+              <select onChange={(event) => setPriority(event.target.value)} value={priority}>
+                {["Urgent", "High", "Normal", "Low"].map((value) => (
+                  <option key={value} value={value}>{value === "Normal" ? "Medium" : value}</option>
                 ))}
               </select>
             </label>
             <label>
-              Help Topic
-              <select
-                onChange={(event) => updateForm("helpTopic", event.target.value)}
-                required
-                value={form.helpTopic}
-              >
-                <option value="">Choose a help topic</option>
-                {helpTopicOptions.map((topic) => (
-                  <option key={topic} value={topic}>{topic}</option>
+              Assign to
+              <select onChange={(event) => setAssignedTo(event.target.value)} value={assignedTo}>
+                <option value="">Unassigned</option>
+                {assignees.map((assignee) => (
+                  <option key={assignee.id} value={assignee.id}>
+                    {assignee.fullName} ({assignee.role === "admin" ? "Admin" : "Technician"})
+                  </option>
                 ))}
               </select>
             </label>
           </div>
-        </section>
-        <section className="request-section">
-          <h2>Ticket Details</h2>
-          <p className="muted">Please describe your issue</p>
-          <TextField label="Issue Summary" value={form.summary} onChange={(value) => updateForm("summary", value)} maxLength={200} required />
-          <label>
-            Details
-            <textarea
-              maxLength={10000}
-              onChange={(event) => updateForm("details", event.target.value)}
-              placeholder="Details on the reasons for opening the ticket"
-              required
-              rows={10}
-              value={form.details}
-            />
-          </label>
-        </section>
-        <section className="request-section walk-in-it-fields">
           <p className="walk-in-source">Source: Walk-in (set automatically)</p>
         </section>
         <FormError message={error} />

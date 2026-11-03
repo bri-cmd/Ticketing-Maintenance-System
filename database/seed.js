@@ -198,7 +198,7 @@ async function main() {
          help_topic, summary, details, priority, source, status, assigned_to)
        VALUES ('IT-0001', ?, ?, ?, NULL, 'Hardware', 'Sample support request',
          'Seeded example ticket for checking the initial setup.', 'Normal',
-         'Signed in', 'Open', ?)
+         'Online', 'Open', ?)
        ON DUPLICATE KEY UPDATE
          requester_user_id = VALUES(requester_user_id),
          department_id = VALUES(department_id),
@@ -217,10 +217,10 @@ async function main() {
       `INSERT INTO tickets
         (ticket_no, guest_name, guest_email, department_id, device_text,
          help_topic, summary, details, priority, source, status)
-       VALUES ('IT-0002', 'Taylor Guest', 'taylor@example.com', ?, 'Personal laptop',
-         'Software', 'Sample guest request',
-         'Seeded guest ticket with a device that is not registered.', 'Low',
-         'Guest', 'In progress')
+       VALUES ('IT-0002', 'Taylor Employee', 'taylor@example.com', ?, 'Personal laptop',
+         'Software', 'Sample online request',
+         'Seeded online ticket with a device that is not registered.', 'Low',
+         'Online', 'In Progress')
        ON DUPLICATE KEY UPDATE
          guest_name = VALUES(guest_name),
          guest_email = VALUES(guest_email),

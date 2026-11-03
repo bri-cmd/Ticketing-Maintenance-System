@@ -93,6 +93,7 @@ async function processReadyMail() {
         `SELECT queue.id, queue.ticket_id, queue.queue_type, queue.to_email,
                 queue.latest_status, queue.assigned_name, queue.has_status_change,
                 queue.visible_notes, queue.revision, ticket.ticket_no, ticket.summary,
+                ticket.source,
                 COALESCE(ticket.guest_name, requester.full_name) AS requester_name
          FROM mail_queue queue
          JOIN tickets ticket ON ticket.id = queue.ticket_id
@@ -120,6 +121,7 @@ async function processReadyMail() {
         ticket: {
           ticketNo: queued.ticket_no,
           summary: queued.summary,
+          source: queued.source,
           requesterName: queued.requester_name,
           status,
           assignedName: queued.assigned_name,

@@ -58,8 +58,8 @@ router.get("/", async (request, response) => {
       actorType: notification.actor_name ? "user"
         : notification.ticket_source === "Online" && notification.guest_name
           ? "employee"
-          : notification.ticket_source === "Guest" && notification.guest_name
-            ? "guest" : "system",
+          : notification.guest_name
+            ? "employee" : "system",
       actorName: notification.actor_name || notification.guest_name || "System",
       actorAvatarPath: versionedAvatarPath(
         notification.actor_avatar_path,
