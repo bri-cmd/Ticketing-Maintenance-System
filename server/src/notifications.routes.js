@@ -56,7 +56,10 @@ router.get("/", async (request, response) => {
       isRead: Boolean(notification.is_read),
       createdAt: notification.created_at,
       actorType: notification.actor_name ? "user"
-        : notification.ticket_source === "Guest" && notification.guest_name ? "guest" : "system",
+        : notification.ticket_source === "Online" && notification.guest_name
+          ? "employee"
+          : notification.ticket_source === "Guest" && notification.guest_name
+            ? "guest" : "system",
       actorName: notification.actor_name || notification.guest_name || "System",
       actorAvatarPath: versionedAvatarPath(
         notification.actor_avatar_path,

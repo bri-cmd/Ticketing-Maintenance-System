@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   summary VARCHAR(200) NOT NULL,
   details TEXT NOT NULL,
   priority ENUM('Low', 'Normal', 'High', 'Urgent') NOT NULL DEFAULT 'Normal',
-  source ENUM('Guest', 'Signed in', 'Walk-in') NOT NULL,
+  source ENUM('Guest', 'Online', 'Signed in', 'Walk-in') NOT NULL,
   status ENUM('Open', 'In progress', 'Waiting for parts', 'Resolved', 'Closed') NOT NULL DEFAULT 'Open',
   assigned_to INT UNSIGNED NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

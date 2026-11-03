@@ -1,7 +1,8 @@
 const express = require("express");
 const { pool } = require("./db");
-const { notifyTicketCreated } = require("./ticket-notifications");
-const { queueTicketReceived, queueTicketUpdate } = require("./mail-queue");
+const { createTicket } = require("./ticket-creation");
+const { parseTicketRequest, resolveTicketDevice } = require("./ticket-request");
+const { queueTicketUpdate } = require("./mail-queue");
 const {
   requirePasswordChangeComplete,
   requireRole,
@@ -11,7 +12,7 @@ const {
 const router = express.Router();
 const statuses = new Set(["Open", "In progress", "Waiting for parts", "Resolved", "Closed"]);
 const priorities = new Set(["Low", "Normal", "High", "Urgent"]);
-const sources = new Set(["Guest", "Signed in", "Walk-in"]);
+const sources = new Set(["Guest", "Online", "Signed in", "Walk-in"]);
 const ticketNumberPattern = /^IT-\d{4,}$/i;
 
 router.use(requireUser, requirePasswordChangeComplete, requireRole("technician", "admin"));
@@ -233,7 +234,7 @@ router.get("/:ticketNo", async (request, response) => {
       id: ticket.id,
       ticketNo: ticket.ticket_no,
       requesterName: ticket.requester_name || ticket.guest_name || "Guest",
-      requesterType: ticket.requester_name ? "Employee" : "Guest",
+      requesterType: ticket.requester_name || ticket.source !== "Guest" ? "Employee" : "Guest",
       requesterEmail: ticket.requester_email || ticket.guest_email,
       department: ticket.department,
       device: ticket.device_id
@@ -504,246 +505,38 @@ router.post("/:ticketNo/link-device", async (request, response) => {
 });
 
 router.post("/walk-in", async (request, response) => {
-  const body = request.body || {};
-  const fullName = typeof body.guestName === "string" ? body.guestName.trim() : "";
-  const requesterUserId = body.requesterUserId === "" || body.requesterUserId === null
-    || body.requesterUserId === undefined
-    ? null
-    : Number(body.requesterUserId);
-  const guestEmail = typeof body.guestEmail === "string" ? body.guestEmail.trim().toLowerCase() : "";
-  const guestDeviceText = typeof body.deviceText === "string" ? body.deviceText.trim() : "";
-  const selectedGuestDeviceId = body.deviceId === undefined || body.deviceId === null || body.deviceId === ""
-    ? null
-    : Number(body.deviceId);
-  const departmentIdInput = body.departmentId === "" || body.departmentId === null
-    || body.departmentId === undefined
-    ? null
-    : Number(body.departmentId);
-  const assignedTo = body.assignedTo === "" || body.assignedTo === null
-    || body.assignedTo === undefined
-    ? null
-    : Number(body.assignedTo);
-  const deviceChoice = body.deviceChoice;
-  const otherDevice = typeof body.otherDevice === "string" ? body.otherDevice.trim() : "";
-  const printerId = Number(body.printerId);
-  const helpTopic = typeof body.helpTopic === "string" ? body.helpTopic.trim() : "";
-  const summary = typeof body.summary === "string" ? body.summary.trim() : "";
-  const details = typeof body.details === "string" ? body.details.trim() : "";
-  const priority = body.priority;
-
-  if ((requesterUserId === null
-      && (!fullName || fullName.length > 150
-        || (guestEmail && (guestEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail)))))
-    || (requesterUserId !== null && (!Number.isInteger(requesterUserId) || requesterUserId < 1))) {
-    response.status(400).json({ message: "Enter a valid guest name and email, or choose an employee." });
+  const parsed = parseTicketRequest(request.body || {});
+  if (parsed.error) {
+    response.status(400).json({ message: parsed.error });
     return;
   }
-  if (requesterUserId === null
-    && (!Number.isInteger(departmentIdInput) || departmentIdInput < 1
-      || guestDeviceText.length > 255
-      || (selectedGuestDeviceId !== null
-        && (!Number.isInteger(selectedGuestDeviceId) || selectedGuestDeviceId < 1)))) {
-    response.status(400).json({ message: "Choose a department and enter a valid device description." });
-    return;
-  }
-  if (assignedTo !== null && (!Number.isInteger(assignedTo) || assignedTo < 1)) {
-    response.status(400).json({ message: "Choose an active admin or technician, or leave the ticket unassigned." });
-    return;
-  }
-  if (!helpTopic || helpTopic.length > 100 || !summary || summary.length > 200
-    || !details || details.length > 10000 || !priorities.has(priority)) {
-    response.status(400).json({ message: "Complete the help topic, problem, and valid priority." });
+  const fields = parsed.fields;
+  const resolvedDevice = await resolveTicketDevice(pool, fields);
+  if (resolvedDevice.error) {
+    response.status(400).json({ message: resolvedDevice.error });
     return;
   }
 
-  const connection = await pool.getConnection();
-  let lockAcquired = false;
-  try {
-    await connection.beginTransaction();
-    let guestName = fullName || null;
-    let requesterName = guestName;
-    let requesterEmail = requesterUserId === null ? (guestEmail || null) : null;
-    let departmentId = departmentIdInput;
-    let deviceId = null;
-    let deviceText = null;
-    if (requesterUserId !== null) {
-      const [employees] = await connection.execute(
-        `SELECT full_name, email, department_id
-         FROM users
-         WHERE id = ? AND role = 'employee' AND active = TRUE`,
-        [requesterUserId],
-      );
-      if (!employees.length) {
-        await connection.rollback();
-        response.status(400).json({ message: "Choose an active employee." });
-        return;
-      }
-      guestName = null;
-      requesterName = employees[0].full_name;
-      requesterEmail = employees[0].email;
-      departmentId = employees[0].department_id;
-      if (!["computer", "printer", "other"].includes(deviceChoice)) {
-        await connection.rollback();
-        response.status(400).json({ message: "Choose what needs help." });
-        return;
-      }
-      if (deviceChoice === "computer") {
-        const [computers] = await connection.execute(
-          `SELECT id FROM devices
-           WHERE assigned_user_id = ? AND type = 'PC' AND status = 'Active'
-           ORDER BY id LIMIT 1`,
-          [requesterUserId],
-        );
-        if (!computers.length) {
-          await connection.rollback();
-          response.status(400).json({ message: "This employee has no active assigned computer." });
-          return;
-        }
-        deviceId = computers[0].id;
-      } else if (deviceChoice === "printer") {
-        if (!Number.isInteger(printerId) || printerId < 1) {
-          await connection.rollback();
-          response.status(400).json({ message: "Choose a shared printer." });
-          return;
-        }
-        const [printers] = await connection.execute(
-          "SELECT id FROM devices WHERE id = ? AND type = 'Printer' AND status = 'Active'",
-          [printerId],
-        );
-        if (!printers.length) {
-          await connection.rollback();
-          response.status(400).json({ message: "Choose an active shared printer." });
-          return;
-        }
-        deviceId = printers[0].id;
-      } else {
-        if (!otherDevice || otherDevice.length > 255) {
-          await connection.rollback();
-          response.status(400).json({ message: "Describe the device or equipment." });
-          return;
-        }
-        deviceText = otherDevice;
-      }
-    } else {
-      const [departments] = await connection.execute(
-        "SELECT id FROM departments WHERE id = ? AND active = TRUE",
-        [departmentId],
-      );
-      if (!departments.length) {
-        await connection.rollback();
-        response.status(400).json({ message: "Choose an active department." });
-        return;
-      }
-      if (selectedGuestDeviceId !== null) {
-        const [devices] = await connection.execute(
-          "SELECT id FROM devices WHERE id = ? AND status = 'Active' LIMIT 1",
-          [selectedGuestDeviceId],
-        );
-        if (!devices.length) {
-          await connection.rollback();
-          response.status(400).json({ message: "Choose an active registered device." });
-          return;
-        }
-        deviceId = devices[0].id;
-      } else if (guestDeviceText) {
-        const [devices] = await connection.execute(
-          "SELECT id FROM devices WHERE LOWER(asset_tag) = LOWER(?) AND status = 'Active' LIMIT 1",
-          [guestDeviceText],
-        );
-        if (devices.length) deviceId = devices[0].id;
-        else deviceText = guestDeviceText;
-      }
-    }
-
-    if (assignedTo !== null) {
-      const [assignees] = await connection.execute(
-        "SELECT id FROM users WHERE id = ? AND role IN ('admin', 'technician') AND active = TRUE",
-        [assignedTo],
-      );
-      if (!assignees.length) {
-        await connection.rollback();
-        response.status(400).json({ message: "Choose an active admin or technician." });
-        return;
-      }
-    }
-
-    const [lockRows] = await connection.execute(
-      "SELECT GET_LOCK('bmc_ticket_numbering', 10) AS acquired",
-    );
-    lockAcquired = lockRows[0].acquired === 1;
-    if (!lockAcquired) {
-      await connection.rollback();
-      response.status(503).json({ message: "Ticket numbering is busy. Please try again." });
-      return;
-    }
-    const [numberRows] = await connection.execute(
-      `SELECT COALESCE(MAX(CAST(SUBSTRING(ticket_no, 4) AS UNSIGNED)), 0) AS last_number
-       FROM tickets
-       WHERE ticket_no REGEXP '^IT-[0-9]+$'`,
-    );
-    const ticketNo = `IT-${String(Number(numberRows[0].last_number) + 1).padStart(4, "0")}`;
-    const [insertResult] = await connection.execute(
-      `INSERT INTO tickets
-        (ticket_no, requester_user_id, guest_name, guest_email, requester_email, department_id,
-         device_id, device_text, help_topic, summary, details, priority, source, assigned_to)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Walk-in', ?)`,
-      [
-        ticketNo,
-        requesterUserId,
-        guestName,
-        requesterUserId === null ? (guestEmail || null) : null,
-        requesterEmail,
-        departmentId,
-        deviceId,
-        deviceText,
-        helpTopic,
-        summary,
-        details,
-        priority,
-        assignedTo,
-      ],
-    );
-    await connection.execute(
-      `INSERT INTO ticket_updates
-        (ticket_id, user_id, note, new_status, visible_to_requester)
-       VALUES (?, ?, ?, 'Open', ?)`,
-      [
-        insertResult.insertId,
-        request.user.id,
-        requesterUserId === null
-          ? `Walk-in ticket created for ${guestName}.`
-          : "Walk-in ticket created.",
-        requesterUserId !== null,
-      ],
-    );
-    await connection.commit();
-    await queueTicketReceived({
-      ticketId: insertResult.insertId,
-      email: requesterEmail,
-    });
-    await notifyTicketCreated({
-      ticketId: insertResult.insertId,
-      ticketNo,
-      summary,
-      source: "Walk-in",
-      actorUserId: request.user.id,
-      requesterName,
-      requesterUserId,
-      assignedTo,
-    });
-    response.status(201).json({ ticketNo });
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    try {
-      if (lockAcquired) {
-        await connection.execute("SELECT RELEASE_LOCK('bmc_ticket_numbering')");
-      }
-    } finally {
-      connection.release();
-    }
-  }
+  const ticketNo = await createTicket({
+    requesterUserId: null,
+    guestName: fields.fullName,
+    guestEmail: fields.email,
+    requesterEmail: fields.email,
+    departmentId: fields.departmentId,
+    deviceId: resolvedDevice.deviceId,
+    deviceText: resolvedDevice.deviceText,
+    helpTopic: fields.helpTopic,
+    summary: fields.summary,
+    details: fields.details,
+    priority: "Normal",
+    source: "Walk-in",
+    assignedTo: request.user.id,
+    createdByUserId: request.user.id,
+    actorUserId: request.user.id,
+    initialNote: `Walk-in ticket created for ${fields.fullName}.`,
+    initialNoteVisible: true,
+  });
+  response.status(201).json({ ticketNo });
 });
 
 module.exports = router;

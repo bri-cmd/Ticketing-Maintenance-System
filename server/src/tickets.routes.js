@@ -1,12 +1,11 @@
 const express = require("express");
 const { pool } = require("./db");
-const { notifyTicketCreated } = require("./ticket-notifications");
-const { queueTicketReceived } = require("./mail-queue");
+const { createTicket } = require("./ticket-creation");
+const { parseTicketRequest, resolveTicketDevice, validEmail } = require("./ticket-request");
 const { checkPublicSubmissionLimit } = require("./public-submission-limits");
 const { requirePasswordChangeComplete, requireUser } = require("./auth");
 
 const router = express.Router();
-const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const validTicketNumber = /^IT-\d{4,}$/i;
 const publicStatuses = ["Submitted", "Received", "Assigned", "In repair", "Resolved"];
 const helpTopics = new Set([
@@ -91,82 +90,6 @@ async function getTicketForTracking(connection, condition, values) {
   });
 }
 
-async function createTicket(ticketData) {
-  const connection = await pool.getConnection();
-  let lockAcquired = false;
-  try {
-    const [lockRows] = await connection.execute(
-      "SELECT GET_LOCK('bmc_ticket_numbering', 10) AS acquired",
-    );
-    lockAcquired = lockRows[0].acquired === 1;
-    if (!lockAcquired) {
-      const error = new Error("Ticket numbering is busy. Please try again.");
-      error.statusCode = 503;
-      throw error;
-    }
-
-    await connection.beginTransaction();
-    const [numberRows] = await connection.execute(
-      `SELECT COALESCE(MAX(CAST(SUBSTRING(ticket_no, 4) AS UNSIGNED)), 0) AS last_number
-       FROM tickets
-       WHERE ticket_no REGEXP '^IT-[0-9]+$'`,
-    );
-    const ticketNo = `IT-${String(Number(numberRows[0].last_number) + 1).padStart(4, "0")}`;
-    const [insertResult] = await connection.execute(
-      `INSERT INTO tickets
-        (ticket_no, requester_user_id, guest_name, guest_email, requester_email, department_id,
-         device_id, device_text, help_topic, summary, details, priority, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        ticketNo,
-        ticketData.requesterUserId,
-        ticketData.guestName,
-        ticketData.guestEmail,
-        ticketData.requesterEmail,
-        ticketData.departmentId,
-        ticketData.deviceId,
-        ticketData.deviceText,
-        ticketData.helpTopic,
-        ticketData.summary,
-        ticketData.details,
-        ticketData.priority,
-        ticketData.source,
-      ],
-    );
-    await connection.execute(
-      `INSERT INTO ticket_updates
-        (ticket_id, note, new_status, visible_to_requester)
-       VALUES (?, ?, 'Open', TRUE)`,
-      [insertResult.insertId, "Your request has been submitted."],
-    );
-    await connection.commit();
-    await queueTicketReceived({
-      ticketId: insertResult.insertId,
-      email: ticketData.requesterEmail,
-    });
-    await notifyTicketCreated({
-      ticketId: insertResult.insertId,
-      ticketNo,
-      summary: ticketData.summary,
-      source: ticketData.source,
-      actorUserId: ticketData.requesterUserId,
-      requesterUserId: ticketData.requesterUserId,
-    });
-    return ticketNo;
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    try {
-      if (lockAcquired) {
-        await connection.execute("SELECT RELEASE_LOCK('bmc_ticket_numbering')");
-      }
-    } finally {
-      connection.release();
-    }
-  }
-}
-
 router.get("/departments", async (_request, response) => {
   const [departments] = await pool.execute(
     "SELECT id, name FROM departments WHERE active = TRUE ORDER BY sort_order, id",
@@ -176,21 +99,13 @@ router.get("/departments", async (_request, response) => {
 
 router.post("/guest", async (request, response) => {
   const body = request.body || {};
-  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-  const fullName = textField(body.fullName, 150);
-  const deviceText = typeof body.device === "string" ? body.device.trim() : "";
-  const selectedDeviceId = body.deviceId === undefined || body.deviceId === null || body.deviceId === ""
-    ? null
-    : Number(body.deviceId);
-  const departmentId = Number(body.departmentId);
-  const helpTopic = textField(body.helpTopic, 100);
-  const summary = textField(body.summary, 200);
-  const details = textField(body.details, 10000);
-
-  if (!validEmail.test(email) || email.length > 254) {
-    response.status(400).json({ message: "Enter a valid email address." });
+  const parsed = parseTicketRequest(body);
+  if (parsed.error) {
+    response.status(400).json({ message: parsed.error });
     return;
   }
+  const fields = parsed.fields;
+  const { email, fullName } = fields;
   const allowedDomains = (process.env.ALLOWED_EMAIL_DOMAINS || "")
     .split(",")
     .map((domain) => domain.trim().toLowerCase().replace(/^@/, ""))
@@ -202,53 +117,10 @@ router.post("/guest", async (request, response) => {
     });
     return;
   }
-  if (!fullName || !Number.isInteger(departmentId) || departmentId < 1) {
-    response.status(400).json({ message: "Enter your name and choose a department." });
+  const resolvedDevice = await resolveTicketDevice(pool, fields);
+  if (resolvedDevice.error) {
+    response.status(400).json({ message: resolvedDevice.error });
     return;
-  }
-  if (deviceText.length > 255) {
-    response.status(400).json({ message: "Device details must be 255 characters or fewer." });
-    return;
-  }
-  if (selectedDeviceId !== null && (!Number.isInteger(selectedDeviceId) || selectedDeviceId < 1)) {
-    response.status(400).json({ message: "Choose a valid registered device." });
-    return;
-  }
-  if (!helpTopic || !summary || !details) {
-    response.status(400).json({ message: "Complete the help topic, issue summary, and details." });
-    return;
-  }
-  const [departments] = await pool.execute(
-    "SELECT id FROM departments WHERE id = ? AND active = TRUE",
-    [departmentId],
-  );
-  if (!departments.length) {
-    response.status(400).json({ message: "Choose an active department." });
-    return;
-  }
-
-  let deviceId = null;
-  let unmatchedDeviceText = deviceText || null;
-  if (selectedDeviceId !== null) {
-    const [devices] = await pool.execute(
-      "SELECT id FROM devices WHERE id = ? AND status = 'Active' LIMIT 1",
-      [selectedDeviceId],
-    );
-    if (!devices.length) {
-      response.status(400).json({ message: "Choose an active registered device." });
-      return;
-    }
-    deviceId = devices[0].id;
-    unmatchedDeviceText = null;
-  } else if (deviceText) {
-    const [devices] = await pool.execute(
-      "SELECT id FROM devices WHERE LOWER(asset_tag) = LOWER(?) LIMIT 1",
-      [deviceText],
-    );
-    if (devices.length) {
-      deviceId = devices[0].id;
-      unmatchedDeviceText = null;
-    }
   }
 
   const limitError = checkPublicSubmissionLimit({ ip: request.ip, email });
@@ -262,14 +134,14 @@ router.post("/guest", async (request, response) => {
     guestName: fullName,
     guestEmail: email,
     requesterEmail: email,
-    departmentId,
-    deviceId,
-    deviceText: unmatchedDeviceText,
-    helpTopic,
-    summary,
-    details,
+    departmentId: fields.departmentId,
+    deviceId: resolvedDevice.deviceId,
+    deviceText: resolvedDevice.deviceText,
+    helpTopic: fields.helpTopic,
+    summary: fields.summary,
+    details: fields.details,
     priority: "Normal",
-    source: "Guest",
+    source: "Online",
   });
   response.status(201).json({ ticketNo });
 });
@@ -289,11 +161,12 @@ router.post("/guest-status", async (request, response) => {
 
   const ticket = await getTicketForTracking(
     pool,
-    "t.ticket_no = ? AND LOWER(t.guest_email) = ? AND t.source = 'Guest'",
+    `t.ticket_no = ? AND LOWER(COALESCE(t.requester_email, t.guest_email)) = ?
+     AND t.source IN ('Guest', 'Online', 'Walk-in')`,
     [ticketNo, email],
   );
   if (!ticket) {
-    response.status(404).json({ message: "No guest ticket matched that number and email." });
+    response.status(404).json({ message: "No ticket matched that number and email." });
     return;
   }
   response.json({ ticket });

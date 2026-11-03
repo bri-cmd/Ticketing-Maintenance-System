@@ -142,9 +142,9 @@ public-submission policy, and the intended visibility of requester emails.
 
 `ALLOWED_EMAIL_DOMAINS` is optional and accepts comma-separated domains, such as
 `example.com, partner.example`. Leave it blank to allow any domain. When set, it
-is enforced only on public guest ticket submissions; signed-in employee and
-staff workflows are unchanged. Public guest submissions are limited to five
-per hour for each source IP and normalized email address.
+is enforced only on public employee IT requests; signed-in employee and staff
+workflows are unchanged. Public ticket submissions are limited to five per hour
+for each source IP and normalized email address.
 
 Test the SMTP configuration by sending a test message:
 
@@ -152,8 +152,8 @@ Test the SMTP configuration by sending a test message:
 npm.cmd run mail:test -- recipient@example.com
 ```
 
-Ticket receipt emails are queued after a guest, employee, or walk-in ticket is
-created. Staff status, assignment, and requester-visible note updates are
+Ticket receipt emails are queued after a public, signed-in employee, or walk-in
+ticket is created. Staff status, assignment, and requester-visible note updates are
 batched for one minute; internal notes are never included. Resolutions use a
 separate resolution message. The email link uses `APP_BASE_URL`.
 
