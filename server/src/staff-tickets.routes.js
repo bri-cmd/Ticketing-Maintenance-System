@@ -486,6 +486,9 @@ router.post("/walk-in", async (request, response) => {
     : Number(body.requesterUserId);
   const guestEmail = typeof body.guestEmail === "string" ? body.guestEmail.trim().toLowerCase() : "";
   const guestDeviceText = typeof body.deviceText === "string" ? body.deviceText.trim() : "";
+  const selectedGuestDeviceId = body.deviceId === undefined || body.deviceId === null || body.deviceId === ""
+    ? null
+    : Number(body.deviceId);
   const departmentIdInput = body.departmentId === "" || body.departmentId === null
     || body.departmentId === undefined
     ? null
@@ -511,7 +514,9 @@ router.post("/walk-in", async (request, response) => {
   }
   if (requesterUserId === null
     && (!Number.isInteger(departmentIdInput) || departmentIdInput < 1
-      || guestDeviceText.length > 255)) {
+      || guestDeviceText.length > 255
+      || (selectedGuestDeviceId !== null
+        && (!Number.isInteger(selectedGuestDeviceId) || selectedGuestDeviceId < 1)))) {
     response.status(400).json({ message: "Choose a department and enter a valid device description." });
     return;
   }
@@ -601,7 +606,18 @@ router.post("/walk-in", async (request, response) => {
         response.status(400).json({ message: "Choose an active department." });
         return;
       }
-      if (guestDeviceText) {
+      if (selectedGuestDeviceId !== null) {
+        const [devices] = await connection.execute(
+          "SELECT id FROM devices WHERE id = ? AND status = 'Active' LIMIT 1",
+          [selectedGuestDeviceId],
+        );
+        if (!devices.length) {
+          await connection.rollback();
+          response.status(400).json({ message: "Choose an active registered device." });
+          return;
+        }
+        deviceId = devices[0].id;
+      } else if (guestDeviceText) {
         const [devices] = await connection.execute(
           "SELECT id FROM devices WHERE LOWER(asset_tag) = LOWER(?) AND status = 'Active' LIMIT 1",
           [guestDeviceText],

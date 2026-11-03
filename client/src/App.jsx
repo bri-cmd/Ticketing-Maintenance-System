@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Link,
@@ -1018,6 +1018,7 @@ function EmployeeHome() {
 function GuestTicketPage() {
   const navigate = useNavigate();
   const [departments, setDepartments] = useState([]);
+  const [selectedDevice, setSelectedDevice] = useState(null);
   const [form, setForm] = useState({
     email: "",
     device: "",
@@ -1049,7 +1050,11 @@ function GuestTicketPage() {
     try {
       const result = await api("/api/tickets/guest", {
         method: "POST",
-        body: jsonBody({ ...form, departmentId: Number(form.departmentId) }),
+        body: jsonBody({
+          ...form,
+          deviceId: selectedDevice?.id || "",
+          departmentId: Number(form.departmentId),
+        }),
       });
       navigate(`/ticket-submitted/${result.ticketNo}`);
     } catch (requestError) {
@@ -1068,13 +1073,33 @@ function GuestTicketPage() {
         <form onSubmit={submit}>
           <h2>Contact Information</h2>
           <div className="guest-contact-grid">
-            <TextField label="Email Address" type="email" value={form.email} onChange={(value) => updateForm("email", value)} maxLength={254} required />
-            <TextField label="Device" value={form.device} onChange={(value) => updateForm("device", value)} maxLength={255} placeholder="Asset tag or device name" />
+            <label className="guest-email-field">
+              Email Address
+              <input
+                maxLength={254}
+                onChange={(event) => updateForm("email", event.target.value)}
+                required
+                type="email"
+                value={form.email}
+              />
+            </label>
+            <PublicDevicePicker
+              departmentId={form.departmentId}
+              departmentName={departments.find((department) => String(department.id) === form.departmentId)?.name || ""}
+              deviceText={form.device}
+              onDeviceChange={setSelectedDevice}
+              onDeviceTextChange={(value) => updateForm("device", value)}
+              selectedDevice={selectedDevice}
+            />
             <TextField label="Full Name" value={form.fullName} onChange={(value) => updateForm("fullName", value)} maxLength={150} required />
             <label>
               Department
               <select
-                onChange={(event) => updateForm("departmentId", event.target.value)}
+                onChange={(event) => {
+                  updateForm("departmentId", event.target.value);
+                  setSelectedDevice(null);
+                  updateForm("device", "");
+                }}
                 required
                 value={form.departmentId}
               >
@@ -1483,6 +1508,248 @@ function TextField({ label, value, onChange, required = false, type = "text", ma
         value={value}
       />
     </label>
+  );
+}
+
+function PublicDevicePicker({
+  departmentId,
+  departmentName,
+  selectedDevice,
+  deviceText,
+  onDeviceChange,
+  onDeviceTextChange,
+}) {
+  const listboxId = useId();
+  const [query, setQuery] = useState("");
+  const [devices, setDevices] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [notListed, setNotListed] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setQuery("");
+    setNotListed(false);
+    setOpen(false);
+    setActiveIndex(-1);
+  }, [departmentId]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const search = query.trim();
+    if (!departmentId && search.length < 2) {
+      setDevices([]);
+      setLoading(false);
+      setError("");
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams();
+      if (departmentId) params.set("department_id", departmentId);
+      if (search) params.set("q", search);
+      setLoading(true);
+      setError("");
+      api(`/api/public/devices?${params.toString()}`)
+        .then(({ devices: values }) => {
+          if (!cancelled) setDevices(values);
+        })
+        .catch((requestError) => {
+          if (!cancelled) setError(requestError.message);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }, 180);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [departmentId, open, query]);
+
+  const printerDevices = devices.filter((device) => device.type === "Printer");
+  const computerDevices = devices.filter((device) => device.type === "PC");
+  const computerGroups = departmentId
+    ? [{ label: `Computers in ${departmentName || "this department"}`, devices: computerDevices }]
+    : [...new Set(computerDevices.map((device) => device.department || "Other computers"))]
+      .map((name) => ({
+        label: name === "Other computers" ? name : `Computers in ${name}`,
+        devices: computerDevices.filter((device) => (device.department || "Other computers") === name),
+      }));
+  const groups = [
+    ...computerGroups.filter((group) => group.devices.length),
+    ...(printerDevices.length ? [{ label: "Printers", devices: printerDevices }] : []),
+  ];
+  const optionCount = devices.length + 1;
+
+  function chooseDevice(device) {
+    onDeviceChange(device);
+    onDeviceTextChange("");
+    setNotListed(false);
+    setQuery("");
+    setOpen(false);
+    setActiveIndex(-1);
+  }
+
+  function chooseNotListed() {
+    onDeviceChange(null);
+    setNotListed(true);
+    setQuery("");
+    setOpen(false);
+    setActiveIndex(-1);
+  }
+
+  function handleKeyDown(event) {
+    if (event.key === "Escape") {
+      setOpen(false);
+      setActiveIndex(-1);
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setOpen(true);
+      setActiveIndex((current) => {
+        if (current < 0) return event.key === "ArrowDown" ? 0 : optionCount - 1;
+        return event.key === "ArrowDown"
+          ? (current + 1) % optionCount
+          : (current - 1 + optionCount) % optionCount;
+      });
+      return;
+    }
+    if (event.key === "Enter" && open && activeIndex >= 0) {
+      event.preventDefault();
+      if (activeIndex === devices.length) chooseNotListed();
+      else if (devices[activeIndex]) chooseDevice(devices[activeIndex]);
+    }
+  }
+
+  function deviceOptionLabel(device) {
+    const specifications = [device.brand, device.model].filter(Boolean).join(" ");
+    const parts = [device.label, specifications, device.department].filter(Boolean);
+    if (device.type === "Printer" && device.location) parts.push(device.location);
+    return parts.join(" · ");
+  }
+
+  return (
+    <div className="public-device-picker">
+      <label htmlFor={`${listboxId}-input`}>Device</label>
+      <div className="public-device-picker-control">
+        <input
+          aria-activedescendant={open && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined}
+          aria-autocomplete="list"
+          aria-controls={listboxId}
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          autoComplete="off"
+          id={`${listboxId}-input`}
+          onBlur={() => setOpen(false)}
+          onChange={(event) => {
+            if (selectedDevice) onDeviceChange(null);
+            if (notListed) {
+              setNotListed(false);
+              onDeviceTextChange("");
+            }
+            setQuery(event.target.value);
+            setOpen(true);
+            setActiveIndex(-1);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={handleKeyDown}
+          placeholder={departmentId ? "Search registered devices" : "Choose a department first, or type to search"}
+          role="combobox"
+          type="text"
+          value={query}
+        />
+        {open && (
+          <div className="public-device-listbox" id={listboxId} role="listbox" aria-label="Registered devices">
+            {!departmentId && query.trim().length < 2 && (
+              <p className="public-device-listbox-hint">
+                Choose a department first, or type to search
+              </p>
+            )}
+            {loading && <p className="public-device-listbox-hint">Searching devices...</p>}
+            {!loading && !error && !devices.length && (departmentId || query.trim().length >= 2) && (
+              <p className="public-device-listbox-hint">No matching registered devices</p>
+            )}
+            {groups.map((group) => {
+              let groupOptionIndex = devices.findIndex((device) => device.id === group.devices[0].id);
+              return (
+                <div aria-label={group.label} key={group.label} role="group">
+                  <div className="public-device-group-label" role="presentation">{group.label}</div>
+                  {group.devices.map((device) => {
+                    const optionIndex = groupOptionIndex;
+                    groupOptionIndex += 1;
+                    return (
+                      <div
+                        aria-selected={activeIndex === optionIndex || selectedDevice?.id === device.id}
+                        className={`public-device-option ${activeIndex === optionIndex ? "is-active" : ""}`}
+                        id={`${listboxId}-option-${optionIndex}`}
+                        key={device.id}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => chooseDevice(device)}
+                        role="option"
+                      >
+                        {deviceOptionLabel(device)}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            <div
+              aria-selected={activeIndex === devices.length || notListed}
+              className={`public-device-option public-device-unlisted ${activeIndex === devices.length ? "is-active" : ""}`}
+              id={`${listboxId}-option-${devices.length}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={chooseNotListed}
+              role="option"
+            >
+              My device is not listed
+            </div>
+          </div>
+        )}
+      </div>
+      {error && <FormError message={error} />}
+      {selectedDevice && (
+        <p className="public-device-selected">
+          {[
+            selectedDevice.type,
+            [selectedDevice.brand, selectedDevice.model].filter(Boolean).join(" "),
+            selectedDevice.department,
+          ].filter(Boolean).join(" · ")}
+          <button
+            className="text-button"
+            onClick={() => chooseDevice(null)}
+            type="button"
+          >
+            Clear
+          </button>
+        </p>
+      )}
+      {notListed && (
+        <div className="public-device-unlisted-input">
+          <TextField
+            label="Describe the device (computer name or location)"
+            maxLength={255}
+            onChange={onDeviceTextChange}
+            required
+            value={deviceText}
+          />
+          <button
+            className="text-button"
+            onClick={() => {
+              setNotListed(false);
+              onDeviceTextChange("");
+            }}
+            type="button"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3317,6 +3584,7 @@ function WalkInTicketPage() {
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
   const [guestDevice, setGuestDevice] = useState("");
+  const [selectedGuestDevice, setSelectedGuestDevice] = useState(null);
   const [guestDepartmentId, setGuestDepartmentId] = useState("");
   const [assignees, setAssignees] = useState([]);
   const [assignedTo, setAssignedTo] = useState(String(user.id));
@@ -3396,6 +3664,7 @@ function WalkInTicketPage() {
                 guestName,
                 guestEmail,
                 deviceText: guestDevice,
+                deviceId: selectedGuestDevice?.id || "",
                 departmentId: Number(guestDepartmentId),
               }),
           helpTopic,
@@ -3523,11 +3792,26 @@ function WalkInTicketPage() {
               <h2>Contact Information</h2>
               <div className="guest-contact-grid">
                 <TextField label="Email address" type="email" value={guestEmail} onChange={setGuestEmail} maxLength={254} />
-                <TextField label="Device" value={guestDevice} onChange={setGuestDevice} maxLength={255} placeholder="Asset tag or device name" />
+                <PublicDevicePicker
+                  departmentId={guestDepartmentId}
+                  departmentName={departments.find((department) => String(department.id) === guestDepartmentId)?.name || ""}
+                  deviceText={guestDevice}
+                  onDeviceChange={setSelectedGuestDevice}
+                  onDeviceTextChange={setGuestDevice}
+                  selectedDevice={selectedGuestDevice}
+                />
                 <TextField label="Full name" value={guestName} onChange={setGuestName} maxLength={150} required />
                 <label>
                   Department
-                  <select onChange={(event) => setGuestDepartmentId(event.target.value)} required value={guestDepartmentId}>
+                  <select
+                    onChange={(event) => {
+                      setGuestDepartmentId(event.target.value);
+                      setSelectedGuestDevice(null);
+                      setGuestDevice("");
+                    }}
+                    required
+                    value={guestDepartmentId}
+                  >
                     <option value="">Choose a department</option>
                     {departments.map((department) => (
                       <option key={department.id} value={department.id}>{department.name}</option>

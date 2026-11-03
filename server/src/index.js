@@ -5,6 +5,7 @@ const { pool, testConnection } = require("./db");
 const { getJwtSecret } = require("./auth");
 const authRoutes = require("./auth.routes");
 const accountRoutes = require("./accounts.routes");
+const publicRoutes = require("./public.routes");
 const notificationRoutes = require("./notifications.routes");
 const ticketRoutes = require("./tickets.routes");
 const staffTicketRoutes = require("./staff-tickets.routes");
@@ -36,6 +37,7 @@ app.get("/api/health", (_request, response) => {
 });
 app.use("/api/auth", authRoutes);
 app.use("/api/accounts", accountRoutes);
+app.use("/api/public", publicRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/staff/tickets", staffTicketRoutes);

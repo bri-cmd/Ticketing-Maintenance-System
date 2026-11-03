@@ -178,6 +178,9 @@ router.post("/guest", async (request, response) => {
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const fullName = textField(body.fullName, 150);
   const deviceText = typeof body.device === "string" ? body.device.trim() : "";
+  const selectedDeviceId = body.deviceId === undefined || body.deviceId === null || body.deviceId === ""
+    ? null
+    : Number(body.deviceId);
   const departmentId = Number(body.departmentId);
   const helpTopic = textField(body.helpTopic, 100);
   const summary = textField(body.summary, 200);
@@ -195,6 +198,10 @@ router.post("/guest", async (request, response) => {
     response.status(400).json({ message: "Device details must be 255 characters or fewer." });
     return;
   }
+  if (selectedDeviceId !== null && (!Number.isInteger(selectedDeviceId) || selectedDeviceId < 1)) {
+    response.status(400).json({ message: "Choose a valid registered device." });
+    return;
+  }
   if (!helpTopic || !summary || !details) {
     response.status(400).json({ message: "Complete the help topic, issue summary, and details." });
     return;
@@ -210,7 +217,18 @@ router.post("/guest", async (request, response) => {
 
   let deviceId = null;
   let unmatchedDeviceText = deviceText || null;
-  if (deviceText) {
+  if (selectedDeviceId !== null) {
+    const [devices] = await pool.execute(
+      "SELECT id FROM devices WHERE id = ? AND status = 'Active' LIMIT 1",
+      [selectedDeviceId],
+    );
+    if (!devices.length) {
+      response.status(400).json({ message: "Choose an active registered device." });
+      return;
+    }
+    deviceId = devices[0].id;
+    unmatchedDeviceText = null;
+  } else if (deviceText) {
     const [devices] = await pool.execute(
       "SELECT id FROM devices WHERE LOWER(asset_tag) = LOWER(?) LIMIT 1",
       [deviceText],

@@ -1088,6 +1088,103 @@ label small,
   margin: 12px 0;
 }
 
+.guest-contact-grid .guest-email-field {
+  max-width: 260px;
+}
+
+.public-device-picker {
+  min-width: 0;
+  margin: 12px 0;
+  color: var(--color-bmc-navy);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.public-device-picker > label {
+  margin: 0 0 8px;
+}
+
+.public-device-picker-control {
+  position: relative;
+}
+
+.public-device-picker-control > input {
+  display: block;
+}
+
+.public-device-listbox {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 10px 24px #17243b20;
+  padding: 5px;
+  color: #17243b;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.public-device-group-label,
+.public-device-listbox-hint {
+  margin: 0;
+  padding: 9px 10px 6px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.public-device-option {
+  border-radius: 5px;
+  cursor: pointer;
+  padding: 9px 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.public-device-option:hover,
+.public-device-option.is-active {
+  background: #eff6ff;
+  color: #1e40af;
+}
+
+.public-device-unlisted {
+  margin-top: 5px;
+  border-top: 1px solid #e2e8f0;
+  border-radius: 0 0 5px 5px;
+  color: #1e40af;
+  font-weight: 600;
+}
+
+.public-device-selected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 7px 0 0;
+  color: #176237;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.public-device-selected .text-button,
+.public-device-unlisted-input > .text-button {
+  flex: 0 0 auto;
+}
+
+.public-device-unlisted-input > label {
+  margin: 9px 0 4px;
+}
+
+.public-device-unlisted-input > .text-button {
+  margin-top: 4px;
+}
+
 .guest-ticket-page hr {
   height: 3px;
   margin: 12px 0 30px;
