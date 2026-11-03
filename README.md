@@ -152,10 +152,11 @@ Test the SMTP configuration by sending a test message:
 npm.cmd run mail:test -- recipient@example.com
 ```
 
-Ticket receipt emails are queued after a public, signed-in employee, or walk-in
-ticket is created. Staff status, assignment, and requester-visible note updates are
-batched for one minute; internal notes are never included. Resolutions use a
-separate resolution message. The email link uses `APP_BASE_URL`.
+Ticket receipt emails are queued immediately after a public, signed-in employee,
+or walk-in ticket is created. Staff status, assignment, and requester-visible note
+updates are batched for up to five seconds; internal notes are never included.
+Resolutions and closures use dedicated email messages. The email link uses
+`APP_BASE_URL`.
 
 Tickets use the source labels `Online` and `Walk-in`, and the active statuses
 `Open`, `In Progress`, `Resolved`, and `Closed`. Resolved tickets stay in the

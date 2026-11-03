@@ -563,7 +563,9 @@ router.patch("/:ticketNo", async (request, response) => {
         email: current.requester_email,
         status,
         assignedName,
-        statusChanged: statusChanged || assignmentChanged,
+        statusChanged,
+        assignmentChanged,
+        closedBy: statusChanged && status === "Closed" ? request.user.full_name : null,
         visibleNote: visibleToRequester ? note : null,
       });
     }

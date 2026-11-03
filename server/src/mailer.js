@@ -68,6 +68,16 @@ function buildEmail({ type, ticket, notes = [] }) {
   const assignedHtml = ticket.assignedName
     ? `<p><strong>Technician:</strong> ${escapeHtml(ticket.assignedName)}</p>`
     : "";
+  const closureInfo = `Closed by ${ticket.closedBy || "IT Support"}.`;
+  const closureText = type === "closed"
+    ? [
+      `Closure information: ${closureInfo}`,
+      ...(ticket.closedAt ? [`Closed at: ${ticket.closedAt}`] : []),
+    ]
+    : [];
+  const closureHtml = type === "closed"
+    ? `<p><strong>Closure information:</strong> ${escapeHtml(closureInfo)}${ticket.closedAt ? `<br><strong>Closed at:</strong> ${escapeHtml(ticket.closedAt)}` : ""}</p>`
+    : "";
   let heading;
   let subject;
   let intro;
@@ -100,6 +110,20 @@ function buildEmail({ type, ticket, notes = [] }) {
       ticketLinkText,
       "If the issue continues or returns, please contact IT Support again.",
     );
+  } else if (type === "closed") {
+    heading = "Your ticket has been closed";
+    subject = `Ticket closed: ${ticket.ticketNo} · ${ticket.summary}`;
+    intro = "Your support ticket has been closed.";
+    detailLines.push(
+      "Your support ticket has been closed.",
+      `Ticket number: ${ticket.ticketNo}`,
+      `Summary: ${ticket.summary}`,
+      "Status: Closed",
+      ...closureText,
+      ...(assignedText ? [assignedText] : []),
+      ...(noteText.length ? ["Message from IT Support:", ...noteText] : []),
+      ticketLinkText,
+    );
   } else {
     heading = type === "message" ? "Message from IT Support" : "Ticket update";
     subject = `${type === "message" ? "Message from IT Support" : "Ticket update"}: ${ticket.ticketNo} · ${ticket.summary}`;
@@ -124,7 +148,7 @@ function buildEmail({ type, ticket, notes = [] }) {
     "",
     "BMC IT Service Desk",
   ].join("\n");
-  const html = `<!doctype html><html><body style="margin:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;color:#182744"><div style="max-width:640px;margin:24px auto;padding:0 16px"><div style="background:#182744;padding:20px 24px;border-radius:8px 8px 0 0"><div style="color:#fff;font-size:18px;font-weight:700">BMC IT Service Desk</div></div><main style="background:#fff;padding:28px 24px;border:1px solid #dce4ef;border-top:0;border-radius:0 0 8px 8px"><p>Hello${ticket.requesterName ? ` ${escapeHtml(ticket.requesterName)}` : ""},</p><h1 style="font-size:22px;margin:20px 0 12px;color:#182744">${escapeHtml(heading)}</h1><p>${escapeHtml(intro)}</p><p><strong>Ticket number:</strong> ${numberHtml}<br><strong>Source:</strong> ${escapeHtml(ticket.source)}<br><strong>Summary:</strong> ${summaryHtml}${type === "received" ? "" : `<br><strong>Status:</strong> ${escapeHtml(type === "resolved" ? "Resolved" : ticket.status)}`}</p>${assignedHtml}${noteHtml}<p style="margin:24px 0"><a href="${escapedUrl}" style="display:inline-block;background:#1e40af;color:#fff;text-decoration:none;padding:11px 16px;border-radius:6px">Check ticket status</a></p>${type === "received" ? `<p style="color:#475569">${escapeHtml("If you did not submit this ticket, you can ignore this email.")}</p>` : ""}${type === "resolved" ? `<p>If the issue continues or returns, please contact IT Support again.</p>` : ""}<p style="margin-top:28px">Regards,<br>BMC IT Service Desk</p></main></div></body></html>`;
+  const html = `<!doctype html><html><body style="margin:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;color:#182744"><div style="max-width:640px;margin:24px auto;padding:0 16px"><div style="background:#182744;padding:20px 24px;border-radius:8px 8px 0 0"><div style="color:#fff;font-size:18px;font-weight:700">BMC IT Service Desk</div></div><main style="background:#fff;padding:28px 24px;border:1px solid #dce4ef;border-top:0;border-radius:0 0 8px 8px"><p>Hello${ticket.requesterName ? ` ${escapeHtml(ticket.requesterName)}` : ""},</p><h1 style="font-size:22px;margin:20px 0 12px;color:#182744">${escapeHtml(heading)}</h1><p>${escapeHtml(intro)}</p><p><strong>Ticket number:</strong> ${numberHtml}<br><strong>Source:</strong> ${escapeHtml(ticket.source)}<br><strong>Summary:</strong> ${summaryHtml}${type === "received" ? "" : `<br><strong>Status:</strong> ${escapeHtml(type === "resolved" ? "Resolved" : ticket.status)}`}</p>${closureHtml}${assignedHtml}${noteHtml}<p style="margin:24px 0"><a href="${escapedUrl}" style="display:inline-block;background:#1e40af;color:#fff;text-decoration:none;padding:11px 16px;border-radius:6px">Check ticket status</a></p>${type === "received" ? `<p style="color:#475569">${escapeHtml("If you did not submit this ticket, you can ignore this email.")}</p>` : ""}${type === "resolved" ? `<p>If the issue continues or returns, please contact IT Support again.</p>` : ""}<p style="margin-top:28px">Regards,<br>BMC IT Service Desk</p></main></div></body></html>`;
   return { subject, text, html };
 }
 

@@ -201,6 +201,7 @@ CREATE TABLE IF NOT EXISTS mail_queue (
   assigned_name VARCHAR(150) NULL,
   has_status_change BOOLEAN NOT NULL DEFAULT FALSE,
   visible_notes JSON NOT NULL,
+  update_events JSON NULL,
   available_at DATETIME NOT NULL,
   revision INT UNSIGNED NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
