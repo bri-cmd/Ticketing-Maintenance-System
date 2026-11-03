@@ -87,13 +87,25 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE TABLE IF NOT EXISTS maintenance_logs (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
   device_id INT UNSIGNED NOT NULL,
+  device_name_snapshot VARCHAR(255) NULL,
+  asset_tag_snapshot VARCHAR(80) NULL,
+  device_type_snapshot ENUM('PC', 'Printer') NULL,
   done_by INT UNSIGNED NOT NULL,
   done_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   checklist_results JSON NOT NULL,
   notes TEXT NULL,
+  maintenance_type ENUM('Routine', 'Repair follow-up', 'Inspection', 'Other')
+    NOT NULL DEFAULT 'Routine',
+  findings TEXT NULL,
+  actions_performed TEXT NULL,
+  parts_replaced TEXT NULL,
+  related_ticket_id INT UNSIGNED NULL,
+  next_scheduled DATE NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_maintenance_logs_device_date (device_id, done_at),
   KEY idx_maintenance_logs_done_by (done_by),
+  KEY idx_maintenance_logs_related_ticket (related_ticket_id),
   CONSTRAINT fk_maintenance_logs_device FOREIGN KEY (device_id)
     REFERENCES devices (id) ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_maintenance_logs_done_by FOREIGN KEY (done_by)
@@ -137,6 +149,10 @@ CREATE TABLE IF NOT EXISTS tickets (
   CONSTRAINT fk_tickets_assigned_to FOREIGN KEY (assigned_to)
     REFERENCES users (id) ON UPDATE CASCADE ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE maintenance_logs
+  ADD CONSTRAINT fk_maintenance_logs_related_ticket FOREIGN KEY (related_ticket_id)
+    REFERENCES tickets (id) ON UPDATE CASCADE ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS ticket_updates (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -211,4 +227,23 @@ CREATE TABLE IF NOT EXISTS mail_queue (
   KEY idx_mail_queue_ready (available_at, id),
   CONSTRAINT fk_mail_queue_ticket FOREIGN KEY (ticket_id)
     REFERENCES tickets (id) ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS device_schedule_events (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  device_id INT UNSIGNED NOT NULL,
+  event_type ENUM('Checkup', 'Postponement', 'Schedule change') NOT NULL,
+  old_due DATE NULL,
+  new_due DATE NOT NULL,
+  reason VARCHAR(1000) NOT NULL,
+  changed_by INT UNSIGNED NULL,
+  changed_by_name VARCHAR(150) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_device_schedule_events_device_date (device_id, created_at, id),
+  KEY idx_device_schedule_events_actor (changed_by),
+  CONSTRAINT fk_device_schedule_events_device FOREIGN KEY (device_id)
+    REFERENCES devices (id) ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_device_schedule_events_actor FOREIGN KEY (changed_by)
+    REFERENCES users (id) ON UPDATE CASCADE ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

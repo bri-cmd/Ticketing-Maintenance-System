@@ -1077,6 +1077,26 @@ label small,
   font-size: 18px;
 }
 
+.ticket-details-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 8px;
+}
+
+.ticket-details-heading h2 {
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.ticket-details-heading::after {
+  flex: 1;
+  border-top: 1px solid var(--color-bmc-border);
+  content: "";
+}
+
 .guest-contact-grid {
   display: grid;
   width: min(100%, 780px);
@@ -1677,6 +1697,20 @@ label small,
 
 .staff-ticket-table th {
   color: #646c78;
+}
+
+.clickable-table-row {
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.clickable-table-row:hover {
+  background: #f5f8fc;
+}
+
+.clickable-table-row:focus-visible {
+  outline: 2px solid #1e40af;
+  outline-offset: -2px;
 }
 
 .ticket-subject {

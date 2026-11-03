@@ -303,6 +303,13 @@ router.get("/:id/checkup", async (request, response) => {
     interval_value: device.interval_value,
     interval_unit: device.interval_unit,
   });
+  const [tickets] = await pool.execute(
+    `SELECT id, ticket_no, summary
+     FROM tickets
+     WHERE device_id = ?
+     ORDER BY created_at DESC, id DESC`,
+    [device.id],
+  );
   response.json({
     device: {
       id: device.id,
@@ -322,6 +329,11 @@ router.get("/:id/checkup", async (request, response) => {
         intervalUnit: device.interval_unit,
         checklist: parseChecklist(device.checklist),
       },
+      tickets: tickets.map((ticket) => ({
+        id: ticket.id,
+        ticketNo: ticket.ticket_no,
+        summary: ticket.summary,
+      })),
     },
   });
 });
@@ -338,10 +350,25 @@ router.post("/:id/checkup", async (request, response) => {
     : typeof body.notes === "string"
       ? body.notes.trim()
       : null;
+  const maintenanceTypes = new Set(["Routine", "Repair follow-up", "Inspection", "Other"]);
+  const maintenanceType = body.maintenanceType === undefined || body.maintenanceType === ""
+    ? "Routine"
+    : body.maintenanceType;
+  const findings = optionalText(body.findings, 10000);
+  const actionsPerformed = optionalText(body.actionsPerformed, 10000);
+  const partsReplaced = optionalText(body.partsReplaced, 5000);
+  const relatedTicketId = body.relatedTicketId === undefined
+    || body.relatedTicketId === ""
+    || body.relatedTicketId === null
+    ? null
+    : Number(body.relatedTicketId);
   if (!Array.isArray(completedItems)
     || completedItems.some((item) => typeof item !== "string")
-    || notes === null || notes.length > 10000) {
-    response.status(400).json({ message: "Enter valid checklist results and notes." });
+    || notes === null || notes.length > 10000
+    || !maintenanceTypes.has(maintenanceType)
+    || findings === undefined || actionsPerformed === undefined || partsReplaced === undefined
+    || (relatedTicketId !== null && (!Number.isInteger(relatedTicketId) || relatedTicketId < 1))) {
+    response.status(400).json({ message: "Enter valid maintenance details, checklist results, and notes." });
     return;
   }
 
@@ -349,7 +376,8 @@ router.post("/:id/checkup", async (request, response) => {
   try {
     await connection.beginTransaction();
     const [devices] = await connection.execute(
-      `SELECT id, type, status, verification
+      `SELECT id, type, status, verification, asset_tag, brand, model,
+              DATE_FORMAT(next_due, '%Y-%m-%d') AS next_due
        FROM devices
        WHERE id = ?
        FOR UPDATE`,
@@ -382,6 +410,17 @@ router.post("/:id/checkup", async (request, response) => {
       response.status(400).json({ message: "Checklist results must match the device maintenance plan." });
       return;
     }
+    if (relatedTicketId !== null) {
+      const [relatedTickets] = await connection.execute(
+        "SELECT id FROM tickets WHERE id = ? AND device_id = ?",
+        [relatedTicketId, devices[0].id],
+      );
+      if (!relatedTickets.length) {
+        await connection.rollback();
+        response.status(400).json({ message: "Choose a ticket linked to this device." });
+        return;
+      }
+    }
     const nextDue = await calculateNextDue(connection, null, plan);
     await connection.execute(
       `UPDATE devices
@@ -396,15 +435,34 @@ router.post("/:id/checkup", async (request, response) => {
     );
     await connection.execute(
       `INSERT INTO maintenance_logs
-        (device_id, done_by, checklist_results, notes)
-       VALUES (?, ?, ?, ?)`,
+        (device_id, device_name_snapshot, asset_tag_snapshot, device_type_snapshot,
+         done_by, checklist_results, notes, maintenance_type, findings,
+         actions_performed, parts_replaced, related_ticket_id, next_scheduled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         devices[0].id,
+        [devices[0].brand, devices[0].model].filter(Boolean).join(" ") || devices[0].asset_tag,
+        devices[0].asset_tag,
+        devices[0].type,
         request.user.id,
         JSON.stringify(completedItems),
         notes || null,
+        maintenanceType,
+        findings,
+        actionsPerformed,
+        partsReplaced,
+        relatedTicketId,
+        nextDue,
       ],
     );
+    if (String(devices[0].next_due) !== String(nextDue)) {
+      await connection.execute(
+        `INSERT INTO device_schedule_events
+          (device_id, event_type, old_due, new_due, reason, changed_by, changed_by_name)
+         VALUES (?, 'Checkup', ?, ?, 'Next maintenance date recalculated after completed maintenance.', ?, ?)`,
+        [devices[0].id, devices[0].next_due, nextDue, request.user.id, request.user.full_name],
+      );
+    }
     await connection.commit();
     response.json({ message: "Checkup recorded.", nextDue });
   } catch (error) {
@@ -431,7 +489,7 @@ router.post("/:id/postpone", async (request, response) => {
   try {
     await connection.beginTransaction();
     const [devices] = await connection.execute(
-      `SELECT id, status, next_due
+      `SELECT id, status, DATE_FORMAT(next_due, '%Y-%m-%d') AS next_due
        FROM devices
        WHERE id = ?
        FOR UPDATE`,
@@ -467,6 +525,19 @@ router.post("/:id/postpone", async (request, response) => {
        SET next_due = ?, postponed_until = ?, postpone_reason = ?
        WHERE id = ?`,
       [newDate, newDate, reason, devices[0].id],
+    );
+    await connection.execute(
+      `INSERT INTO device_schedule_events
+        (device_id, event_type, old_due, new_due, reason, changed_by, changed_by_name)
+       VALUES (?, 'Postponement', ?, ?, ?, ?, ?)`,
+      [
+        devices[0].id,
+        devices[0].next_due,
+        newDate,
+        reason,
+        request.user.id,
+        request.user.full_name,
+      ],
     );
     await connection.commit();
     response.json({ message: "Maintenance postponed.", nextDue: newDate });
@@ -704,13 +775,65 @@ router.get("/:id", async (request, response) => {
     [device.id],
   );
   const [history] = await pool.execute(
-    `SELECT log.done_at, log.checklist_results, log.notes, user.full_name AS done_by
+    `SELECT log.id,
+            DATE_FORMAT(log.done_at, '%Y-%m-%d %H:%i:%s') AS done_at,
+            DATE_FORMAT(log.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+            log.device_name_snapshot,
+            log.asset_tag_snapshot, log.device_type_snapshot, log.maintenance_type,
+            log.checklist_results, log.findings, log.actions_performed,
+            log.parts_replaced, log.notes,
+            DATE_FORMAT(log.next_scheduled, '%Y-%m-%d') AS next_scheduled,
+            ticket.ticket_no AS related_ticket_no, ticket.summary AS related_ticket_summary,
+            user.full_name AS done_by
      FROM maintenance_logs log
      JOIN users user ON user.id = log.done_by
+     LEFT JOIN tickets ticket ON ticket.id = log.related_ticket_id
      WHERE log.device_id = ?
      ORDER BY log.done_at DESC, log.id DESC`,
     [device.id],
   );
+  const [scheduleEvents] = await pool.execute(
+    `SELECT id, event_type,
+            DATE_FORMAT(old_due, '%Y-%m-%d') AS old_due,
+            DATE_FORMAT(new_due, '%Y-%m-%d') AS new_due,
+            reason, changed_by_name,
+            DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+     FROM device_schedule_events
+     WHERE device_id = ?
+     ORDER BY created_at DESC, id DESC`,
+    [device.id],
+  );
+  const maintenanceHistory = history.map((entry) => ({
+    id: `maintenance-${entry.id}`,
+    entryType: "maintenance",
+    doneAt: entry.done_at,
+    createdAt: entry.created_at,
+    deviceName: entry.device_name_snapshot,
+    assetTag: entry.asset_tag_snapshot,
+    deviceType: entry.device_type_snapshot,
+    maintenanceType: entry.maintenance_type,
+    doneBy: entry.done_by,
+    checklist: parseChecklist(entry.checklist_results),
+    findings: entry.findings,
+    actionsPerformed: entry.actions_performed,
+    partsReplaced: entry.parts_replaced,
+    notes: entry.notes,
+    nextScheduled: entry.next_scheduled,
+    relatedTicketNo: entry.related_ticket_no,
+    relatedTicketSummary: entry.related_ticket_summary,
+  }));
+  const scheduleHistory = scheduleEvents.map((entry) => ({
+    id: `schedule-${entry.id}`,
+    entryType: "schedule",
+    eventType: entry.event_type,
+    oldDue: entry.old_due,
+    newDue: entry.new_due,
+    reason: entry.reason,
+    changedBy: entry.changed_by_name,
+    createdAt: entry.created_at,
+  }));
+  const combinedHistory = [...maintenanceHistory, ...scheduleHistory]
+    .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt));
   response.json({
     device: {
       id: device.id,
@@ -748,12 +871,7 @@ router.get("/:id", async (request, response) => {
         status: ticket.status,
         createdAt: ticket.created_at,
       })),
-      history: history.map((entry) => ({
-        doneAt: entry.done_at,
-        doneBy: entry.done_by,
-        checklist: parseChecklist(entry.checklist_results),
-        notes: entry.notes,
-      })),
+      history: combinedHistory,
     },
   });
 });
@@ -774,6 +892,7 @@ router.patch("/:id", async (request, response) => {
     await connection.beginTransaction();
     const [currentRows] = await connection.execute(
       `SELECT id, type, department_id,
+              DATE_FORMAT(next_due, '%Y-%m-%d') AS next_due,
               DATE_FORMAT(last_serviced, '%Y-%m-%d') AS last_serviced
        FROM devices
        WHERE id = ?
@@ -835,6 +954,24 @@ router.patch("/:id", async (request, response) => {
         Number(request.params.id),
       ],
     );
+    if (nextDue && currentRows[0].next_due !== nextDue) {
+      const reason = currentRows[0].type !== device.type
+        ? `Maintenance plan changed from ${currentRows[0].type} to ${device.type}.`
+        : `Next maintenance recalculated after changing the last serviced date to ${device.lastServiced || "not recorded"}.`;
+      await connection.execute(
+        `INSERT INTO device_schedule_events
+          (device_id, event_type, old_due, new_due, reason, changed_by, changed_by_name)
+         VALUES (?, 'Schedule change', ?, ?, ?, ?, ?)`,
+        [
+          Number(request.params.id),
+          currentRows[0].next_due,
+          nextDue,
+          reason,
+          request.user.id,
+          request.user.full_name,
+        ],
+      );
+    }
     await connection.commit();
     response.json({ message: "Device specifications saved." });
   } catch (error) {

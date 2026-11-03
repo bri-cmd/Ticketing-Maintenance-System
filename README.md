@@ -197,6 +197,11 @@ reports. Reports show received and resolved ticket counts, average resolution
 time, tickets by department and help topic, and the current on-schedule device
 percentage. Admins can export filtered ticket and maintenance-log CSV files.
 
+Device detail pages keep a permanent, newest-first maintenance timeline,
+including checkup details, linked tickets, and separate schedule-change events.
+The Record checkup form can capture the maintenance type, findings, actions,
+parts replaced, and a related ticket.
+
 ## Automatic and manual database backups
 
 When `mysqldump.exe` is available, the server runs a backup daily at 2:00 AM

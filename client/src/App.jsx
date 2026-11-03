@@ -130,8 +130,9 @@ function TicketRequesterIssueFields({
           </select>
         </label>
       </div>
-      <hr />
-      <h2>Ticket Details</h2>
+      <div className="ticket-details-heading">
+        <h2>Ticket Details</h2>
+      </div>
       <p className="muted">Please describe your issue</p>
       <div className="guest-ticket-details">
         <TextField
@@ -1061,7 +1062,14 @@ function EmployeeHome() {
                 </thead>
                 <tbody>
                   {tickets.map((ticket) => (
-                    <tr key={ticket.ticketNo}>
+                    <tr
+                      aria-label={`Open request ${ticket.ticketNo}: ${ticket.summary}`}
+                      className="clickable-table-row"
+                      key={ticket.ticketNo}
+                      onClick={(event) => navigateTableRow(event, navigate, `/employee/requests/${ticket.ticketNo}`)}
+                      onKeyDown={(event) => handleTableRowKeyDown(event, navigate, `/employee/requests/${ticket.ticketNo}`)}
+                      tabIndex={0}
+                    >
                       <td>
                         <Link to={`/employee/requests/${ticket.ticketNo}`}>
                           {ticket.ticketNo}
@@ -2036,6 +2044,20 @@ function StatusBadge({ status }) {
   return <span className={`staff-status-badge status-${statusClass}`}>{status}</span>;
 }
 
+function navigateTableRow(event, navigate, href) {
+  if (event.target.closest("a, button, input, select, textarea, [role='button'], [role='checkbox']")) {
+    return;
+  }
+  navigate(href);
+}
+
+function handleTableRowKeyDown(event, navigate, href) {
+  if (event.key === "Enter" && event.target === event.currentTarget) {
+    event.preventDefault();
+    navigate(href);
+  }
+}
+
 function formatResolutionMinutes(minutes) {
   if (minutes === null || minutes === undefined) return "No resolved tickets";
   const total = Math.round(minutes);
@@ -2192,6 +2214,7 @@ function ReportsPage() {
 
 function TicketQueuePage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [tickets, setTickets] = useState([]);
   const [status, setStatus] = useState(() => {
     const initial = searchParams.get("status");
@@ -2302,7 +2325,14 @@ function TicketQueuePage() {
           </thead>
           <tbody>
             {tickets.map((ticket) => (
-              <tr key={ticket.ticketNo}>
+              <tr
+                aria-label={`Open ticket ${ticket.ticketNo}: ${ticket.summary}`}
+                className="clickable-table-row"
+                key={ticket.ticketNo}
+                onClick={(event) => navigateTableRow(event, navigate, `/staff/tickets/${ticket.ticketNo}`)}
+                onKeyDown={(event) => handleTableRowKeyDown(event, navigate, `/staff/tickets/${ticket.ticketNo}`)}
+                tabIndex={0}
+              >
                 <td>
                   <Link to={`/staff/tickets/${ticket.ticketNo}`}>{ticket.ticketNo}</Link>
                   <small className="ticket-subject">{ticket.summary}</small>
@@ -2332,6 +2362,7 @@ function TicketQueuePage() {
 const ticketStatuses = ["Open", "In Progress", "Resolved", "Closed"];
 
 function TicketHistoryPage() {
+  const navigate = useNavigate();
   const [tickets, setTickets] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [assignees, setAssignees] = useState([]);
@@ -2443,7 +2474,14 @@ function TicketHistoryPage() {
           </thead>
           <tbody>
             {tickets.map((ticket) => (
-              <tr key={ticket.ticketNo}>
+              <tr
+                aria-label={`Open ticket ${ticket.ticketNo}: ${ticket.summary}`}
+                className="clickable-table-row"
+                key={ticket.ticketNo}
+                onClick={(event) => navigateTableRow(event, navigate, `/staff/tickets/${ticket.ticketNo}`)}
+                onKeyDown={(event) => handleTableRowKeyDown(event, navigate, `/staff/tickets/${ticket.ticketNo}`)}
+                tabIndex={0}
+              >
                 <td>
                   <Link to={`/staff/tickets/${ticket.ticketNo}`}>{ticket.ticketNo}</Link>
                   <small className="ticket-subject">{ticket.summary}</small>
@@ -2773,6 +2811,7 @@ function TicketDetailPage() {
 }
 
 function DeviceListPage() {
+  const navigate = useNavigate();
   const [devices, setDevices] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [searchInput, setSearchInput] = useState("");
@@ -2872,7 +2911,14 @@ function DeviceListPage() {
           </thead>
           <tbody>
             {devices.map((device) => (
-              <tr key={device.id}>
+              <tr
+                aria-label={`Open device ${device.assetTag}`}
+                className="clickable-table-row"
+                key={device.id}
+                onClick={(event) => navigateTableRow(event, navigate, `/staff/devices/${device.id}`)}
+                onKeyDown={(event) => handleTableRowKeyDown(event, navigate, `/staff/devices/${device.id}`)}
+                tabIndex={0}
+              >
                 <td>{device.assetTag}</td>
                 {type === "All" && <td>{device.type}</td>}
                 <td>{[device.brand, device.model].filter(Boolean).join(" ") || "—"}</td>
@@ -3244,14 +3290,37 @@ function DeviceDetailPage() {
               <h2>Maintenance history</h2>
               {device.history.length ? (
                 <ul className="device-history-list">
-                  {device.history.map((entry, index) => (
-                    <li key={`${entry.doneAt}-${index}`}>
-                      <strong>{formatDate(entry.doneAt)}</strong>
-                      <span>Completed by {entry.doneBy}</span>
-                      {entry.checklist.length > 0 && (
-                        <span>Completed: {entry.checklist.join(" · ")}</span>
+                  {device.history.map((entry) => (
+                    <li className="device-history-entry" key={entry.id}>
+                      {entry.entryType === "maintenance" ? (
+                        <>
+                          <strong>{entry.deviceName} · {entry.assetTag} · {entry.deviceType}</strong>
+                          <span>{entry.maintenanceType} · {formatDate(entry.doneAt)}</span>
+                          <span>Completed by {entry.doneBy}</span>
+                          {entry.findings && <p><strong>Findings:</strong> {entry.findings}</p>}
+                          {entry.actionsPerformed && <p><strong>Actions performed:</strong> {entry.actionsPerformed}</p>}
+                          {entry.partsReplaced && <p><strong>Parts replaced:</strong> {entry.partsReplaced}</p>}
+                          {entry.checklist.length > 0 && <span>Checklist: {entry.checklist.join(" · ")}</span>}
+                          {entry.notes && <p><strong>Notes:</strong> {entry.notes}</p>}
+                          {entry.relatedTicketNo && (
+                            <span>
+                              Related ticket: <Link to={`/staff/tickets/${entry.relatedTicketNo}`}>
+                                {entry.relatedTicketNo}{entry.relatedTicketSummary ? ` · ${entry.relatedTicketSummary}` : ""}
+                              </Link>
+                            </span>
+                          )}
+                          {entry.nextScheduled && <span>Next scheduled: {formatMaintenanceDate(entry.nextScheduled)}</span>}
+                          <small>Record created {formatDate(entry.createdAt)}</small>
+                        </>
+                      ) : (
+                        <>
+                          <strong>{entry.eventType} · Schedule changed</strong>
+                          <span>{entry.oldDue ? formatMaintenanceDate(entry.oldDue) : "No previous due date"} → {formatMaintenanceDate(entry.newDue)}</span>
+                          <p>{entry.reason}</p>
+                          <span>Changed by {entry.changedBy}</span>
+                          <small>{formatDate(entry.createdAt)}</small>
+                        </>
                       )}
-                      {entry.notes && <p>{entry.notes}</p>}
                     </li>
                   ))}
                 </ul>
@@ -3309,6 +3378,7 @@ function MaintenanceProcess({ activeStep, message }) {
 }
 
 function MaintenanceSchedulePage() {
+  const navigate = useNavigate();
   const [devices, setDevices] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [type, setType] = useState("All");
@@ -3433,7 +3503,14 @@ function MaintenanceSchedulePage() {
           </thead>
           <tbody>
             {devices.map((device) => (
-              <tr key={device.id}>
+              <tr
+                aria-label={`Open device ${device.assetTag}`}
+                className="clickable-table-row"
+                key={device.id}
+                onClick={(event) => navigateTableRow(event, navigate, `/staff/devices/${device.id}`)}
+                onKeyDown={(event) => handleTableRowKeyDown(event, navigate, `/staff/devices/${device.id}`)}
+                tabIndex={0}
+              >
                 <td><Link to={`/staff/devices/${device.id}`}>{device.assetTag}</Link></td>
                 <td>{device.type}</td>
                 <td>{device.department || "—"}</td>
@@ -3524,6 +3601,11 @@ function RecordCheckupPage() {
   const navigate = useNavigate();
   const [device, setDevice] = useState(null);
   const [completedItems, setCompletedItems] = useState([]);
+  const [maintenanceType, setMaintenanceType] = useState("Routine");
+  const [findings, setFindings] = useState("");
+  const [actionsPerformed, setActionsPerformed] = useState("");
+  const [partsReplaced, setPartsReplaced] = useState("");
+  const [relatedTicketId, setRelatedTicketId] = useState("");
   const [notes, setNotes] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -3551,7 +3633,15 @@ function RecordCheckupPage() {
     try {
       await api(`/api/staff/devices/${encodeURIComponent(id)}/checkup`, {
         method: "POST",
-        body: jsonBody({ completedItems, notes }),
+        body: jsonBody({
+          completedItems,
+          maintenanceType,
+          findings,
+          actionsPerformed,
+          partsReplaced,
+          relatedTicketId,
+          notes,
+        }),
       });
       navigate(`/staff/devices/${id}`, {
         state: { notice: "Checkup recorded. Maintenance dates updated and any postponement cleared." },
@@ -3597,6 +3687,52 @@ function RecordCheckupPage() {
                   <p className="muted">This plan has no checklist items. You can still record the checkup.</p>
                 )}
               </div>
+              <label>
+                Maintenance type
+                <select onChange={(event) => setMaintenanceType(event.target.value)} value={maintenanceType}>
+                  {["Routine", "Repair follow-up", "Inspection", "Other"].map((value) => (
+                    <option key={value} value={value}>{value}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Findings
+                <textarea
+                  maxLength={10000}
+                  onChange={(event) => setFindings(event.target.value)}
+                  rows={3}
+                  value={findings}
+                />
+              </label>
+              <label>
+                Actions performed
+                <textarea
+                  maxLength={10000}
+                  onChange={(event) => setActionsPerformed(event.target.value)}
+                  rows={3}
+                  value={actionsPerformed}
+                />
+              </label>
+              <label>
+                Parts replaced
+                <textarea
+                  maxLength={5000}
+                  onChange={(event) => setPartsReplaced(event.target.value)}
+                  rows={2}
+                  value={partsReplaced}
+                />
+              </label>
+              <label>
+                Related ticket (optional)
+                <select onChange={(event) => setRelatedTicketId(event.target.value)} value={relatedTicketId}>
+                  <option value="">No related ticket</option>
+                  {device.tickets.map((ticket) => (
+                    <option key={ticket.id} value={ticket.id}>
+                      {ticket.ticketNo} · {ticket.summary}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label>
                 Notes
                 <textarea
