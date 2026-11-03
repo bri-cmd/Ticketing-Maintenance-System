@@ -169,11 +169,11 @@ function Brand({ compact = false }) {
       <span>
         {compact ? (
           <>
-            <strong>IT Service Desk</strong>
+            <strong>BMC IT HELPDESK</strong>
             <small>Brilliant Metal Craft and Machine Design OPC</small>
           </>
         ) : (
-          <strong>Brilliant Metal Craft and Machine Design OPC</strong>
+          <strong>BMC IT HELPDESK</strong>
         )}
       </span>
     </div>
@@ -185,7 +185,7 @@ function Header() {
 
   return (
     <header className="public-header">
-      <Link to="/" className="brand-link" aria-label="BMC IT Support home">
+      <Link to="/" className="brand-link" aria-label="BMC IT HELPDESK home">
         <Brand />
       </Link>
       {user ? (
@@ -712,10 +712,9 @@ function PublicHome() {
       <Header />
       <main className="home-content">
         <section className="home-intro">
-          <h1>Welcome to BMC IT Support</h1>
+          <h1>Welcome to BMC IT HELPDESK</h1>
           <p>
-            Get help with your computer, printer, or other IT issue. Sign in
-            with the account provided by IT to manage your requests, or open a
+            Get help with your computer, printer, or other IT issue. Open a
             ticket directly without signing in.
           </p>
         </section>

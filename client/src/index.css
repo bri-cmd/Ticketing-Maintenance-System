@@ -631,7 +631,7 @@ button:disabled {
 
 .public-page {
   min-height: 100vh;
-  background: #fff;
+  background: #fff url("/design_background.png") center / cover fixed no-repeat;
 }
 
 .public-header:has(.profile-menu) {
