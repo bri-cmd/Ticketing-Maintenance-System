@@ -87,6 +87,31 @@ button:disabled {
   background: #fff;
 }
 
+.public-header-prominent {
+  height: 104px;
+  padding: 0 48px;
+}
+
+.public-header-home {
+  background: transparent;
+  border-bottom: 1px solid #17243b24;
+}
+
+.public-header-prominent .brand {
+  gap: 16px;
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.public-header-prominent .brand-logo {
+  width: 72px;
+  height: 72px;
+}
+
+.public-header-prominent .account-link {
+  font-size: 15px;
+}
+
 .profile-menu {
   position: relative;
   display: flex;
@@ -631,11 +656,19 @@ button:disabled {
 
 .public-page {
   min-height: 100vh;
-  background: #fff url("/design_background.png") center / cover fixed no-repeat;
+  background: #fff;
+}
+
+.public-home-page {
+  background: #fff url("/design_background.png") center center / cover no-repeat;
 }
 
 .public-header:has(.profile-menu) {
   height: var(--header-height);
+}
+
+.public-header-prominent:has(.profile-menu) {
+  height: 104px;
 }
 
 .home-content {
@@ -644,8 +677,8 @@ button:disabled {
   align-items: center;
   gap: 10%;
   width: min(1208px, calc(100% - 64px));
-  min-height: calc(100vh - 68px);
-  margin: -22px auto 0;
+  min-height: calc(100vh - 104px);
+  margin: 0 auto;
 }
 
 .home-intro h1 {
@@ -719,7 +752,7 @@ button:disabled {
 .signin-page {
   display: grid;
   min-height: 100vh;
-  grid-template-columns: 56.6% 43.4%;
+  grid-template-columns: 1fr 1fr;
   background: #fff;
 }
 
@@ -728,26 +761,28 @@ button:disabled {
   flex-direction: column;
   justify-content: center;
   border-right: 1px solid #e6e8eb;
+  background: #fff url("../../design/design%20background%201.png") center center / cover no-repeat;
   padding: 48px;
 }
 
 .signin-brand-copy {
-  max-width: 670px;
-  margin: auto 0;
+  width: min(100%, 670px);
+  margin: auto;
 }
 
 .signin-brand-copy img {
   display: block;
-  width: 280px;
-  height: 300px;
-  margin: 0 0 24px 20px;
+  width: 240px;
+  height: 240px;
+  margin: 0 0 24px;
   object-fit: contain;
 }
 
 .signin-brand-copy h1 {
   margin: 0 0 16px;
   color: var(--color-bmc-blue);
-  font-size: clamp(22px, 2.1vw, 30px);
+  font-size: 28px;
+  font-weight: 700;
   line-height: 1.2;
 }
 
@@ -761,7 +796,8 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 28px;
+  background: #fff;
+  padding: 40px;
 }
 
 .signin-card,
@@ -775,8 +811,8 @@ button:disabled {
 
 .signin-card {
   width: min(432px, 100%);
-  padding: 22px 20px;
-  box-shadow: 0 2px 4px #18274433;
+  padding: 26px 22px;
+  box-shadow: 0 8px 24px #1827441f;
 }
 
 .signin-card h2 {
@@ -842,12 +878,18 @@ label small,
 }
 
 .signin-note {
+  display: grid;
+  gap: 8px;
   margin: 18px 0 0;
   border-top: 1px solid var(--color-bmc-border);
   padding-top: 16px;
   color: var(--color-bmc-muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.signin-note a {
+  color: var(--color-bmc-primary);
 }
 
 .form-error {
@@ -2701,6 +2743,38 @@ label small,
   margin: 0;
 }
 
+@media (max-width: 900px) {
+  .signin-page {
+    grid-template-columns: 1fr;
+  }
+
+  .signin-brand-panel {
+    min-height: 340px;
+    border-right: 0;
+    border-bottom: 1px solid #e6e8eb;
+    padding: 28px 36px;
+  }
+
+  .signin-brand-copy {
+    text-align: center;
+  }
+
+  .signin-brand-copy img {
+    width: 128px;
+    height: 128px;
+    margin: 0 auto 12px;
+  }
+
+  .signin-brand-copy h1 {
+    margin-bottom: 8px;
+    font-size: 24px;
+  }
+
+  .signin-form-panel {
+    padding: 40px 24px;
+  }
+}
+
 @media (max-width: 1050px) {
   .accounts-grid {
     grid-template-columns: 1fr;
@@ -2760,6 +2834,12 @@ label small,
     padding: 0 14px;
   }
 
+  .public-header-prominent,
+  .public-header-prominent:has(.profile-menu) {
+    height: 84px;
+    padding: 0 18px;
+  }
+
   .public-header .brand {
     gap: 7px;
     font-size: 12px;
@@ -2770,8 +2850,26 @@ label small,
     height: 36px;
   }
 
+  .public-header-prominent .brand {
+    gap: 9px;
+    font-size: 17px;
+  }
+
+  .public-header-prominent .brand-logo {
+    width: 56px;
+    height: 56px;
+  }
+
+  .public-header-prominent .account-link {
+    font-size: 12px;
+  }
+
   .public-header:has(.profile-menu) .brand > span {
     display: none;
+  }
+
+  .public-header-prominent:has(.profile-menu) .brand > span {
+    display: block;
   }
 
   .public-header:has(.profile-menu) {
@@ -2810,7 +2908,7 @@ label small,
     gap: 30px;
     width: calc(100% - 40px);
     align-content: center;
-    min-height: calc(100vh - 60px);
+    min-height: calc(100vh - 84px);
     margin-top: 0;
     padding: 45px 0;
   }
@@ -2824,34 +2922,32 @@ label small,
   }
 
   .signin-brand-panel {
-    min-height: 235px;
-    border-right: 0;
-    padding: 24px;
+    min-height: 280px;
+    padding: 24px 18px;
   }
 
   .signin-brand-copy {
-    margin: 20px auto 0;
-    text-align: center;
+    margin: auto;
   }
 
   .signin-brand-copy img {
-    width: 90px;
-    height: 90px;
+    width: 100px;
+    height: 100px;
     margin: 0 auto 8px;
   }
 
   .signin-brand-copy h1 {
     margin-bottom: 7px;
-    font-size: 18px;
+    font-size: 20px;
   }
 
   .signin-brand-copy p {
-    font-size: 12px;
+    font-size: 13px;
   }
 
   .signin-form-panel {
-    align-items: flex-start;
-    padding: 8px 18px 28px;
+    align-items: center;
+    padding: 28px 18px;
   }
 
   .signin-card {

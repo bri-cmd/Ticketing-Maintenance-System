@@ -165,7 +165,7 @@ function useAuth() {
 function Brand({ compact = false }) {
   return (
     <div className={`brand ${compact ? "brand-compact" : ""}`}>
-      <img className="brand-logo" src="/bmc-logo.png" alt="BMC logo" />
+      <img className="brand-logo" src="/bmc2.png" alt="BMC logo" />
       <span>
         {compact ? (
           <>
@@ -180,11 +180,11 @@ function Brand({ compact = false }) {
   );
 }
 
-function Header() {
+function Header({ variant = "default" }) {
   const { user } = useAuth();
 
   return (
-    <header className="public-header">
+    <header className={`public-header ${variant === "large" ? "public-header-prominent" : ""} ${variant === "home" ? "public-header-prominent public-header-home" : ""}`}>
       <Link to="/" className="brand-link" aria-label="BMC IT HELPDESK home">
         <Brand />
       </Link>
@@ -708,8 +708,8 @@ function PublicHome() {
     ? "/employee/new-request"
     : "/guest/new-ticket";
   return (
-    <div className="public-page">
-      <Header />
+    <div className="public-page public-home-page">
+      <Header variant="home" />
       <main className="home-content">
         <section className="home-intro">
           <h1>Welcome to BMC IT HELPDESK</h1>
@@ -774,17 +774,17 @@ function SignInPage() {
     <main className="signin-page">
       <section className="signin-brand-panel">
         <div className="signin-brand-copy">
-          <Link to="/" aria-label="BMC IT Support home">
-            <img src="/bmc-logo.png" alt="" />
+          <Link to="/" aria-label="BMC IT HELPDESK main page">
+            <img src="/bmc2.png" alt="" />
           </Link>
           <h1>Brilliant Metal Craft and Machine Design OPC</h1>
-          <p>IT Service Desk · Request help, track tickets, manage maintenance</p>
+          <p>IT Service Desk · Manage tickets, devices, and maintenance</p>
         </div>
       </section>
       <section className="signin-form-panel">
         <form className="signin-card" onSubmit={handleSubmit}>
           <h2>Sign in</h2>
-          <p className="muted">Use the username and password from the IT department.</p>
+          <p className="muted">For IT staff and administrators.</p>
           <FormError message={error} />
           <label>
             Username
@@ -793,7 +793,7 @@ function SignInPage() {
               autoFocus
               maxLength={80}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="Example: m.santos"
+              placeholder="Username"
               required
               value={username}
             />
@@ -813,12 +813,10 @@ function SignInPage() {
             {submitting ? "Signing in..." : "Sign in"}
           </button>
           <p className="signin-note">
-            No sign-up. IT creates every account.
-            <br />
-            First time? Use the temporary password from IT. You will be asked
-            to choose a new one.
-            <br />
-            Forgot your password? Ask IT to reset it.
+            <span>
+              Employees do not need to sign in. Open a ticket from the <Link to="/">main page</Link>.
+            </span>
+            <span>Forgot your password? Ask an IT administrator to reset it.</span>
           </p>
         </form>
       </section>
@@ -1172,7 +1170,7 @@ function GuestTicketPage() {
 
   return (
     <div className="public-page">
-      <Header />
+      <Header variant="large" />
       <main className="guest-ticket-page">
         <h1>Open a New Ticket</h1>
         <p className="muted">Employees can submit an IT request here without signing in.</p>
@@ -1261,7 +1259,7 @@ function TicketStatusForm() {
 
   return (
     <div className="public-page">
-      <Header />
+      <Header variant="large" />
       <main className="ticket-status-page">
         <h1>Check Ticket Status</h1>
         <p className="muted">Enter your ticket number and the email address used to submit it.</p>
