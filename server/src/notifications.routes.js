@@ -23,14 +23,18 @@ router.get("/", async (request, response) => {
     return;
   }
   const [rows] = await pool.execute(
-    `SELECT n.id, n.ticket_id, ticket.ticket_no, n.title, n.message, n.is_read,
+    `SELECT n.id, n.ticket_id, n.actor_user_id, ticket.ticket_no, ticket.summary,
+            ticket.priority, ticket.status AS ticket_status, ticket.source AS ticket_source,
+            ticket_department.name AS ticket_department,
+            n.title, n.message, n.is_read,
             DATE_FORMAT(n.created_at, '%Y-%m-%dT%H:%i:%s') AS created_at,
             actor.full_name AS actor_name, actor.avatar_path AS actor_avatar_path,
             DATE_FORMAT(actor.updated_at, '%Y%m%d%H%i%s') AS actor_avatar_version,
             actor_department.name AS actor_department,
-            ticket.source AS ticket_source, ticket.guest_name AS guest_name
+            ticket.guest_name AS guest_name
      FROM notifications n
      LEFT JOIN tickets ticket ON ticket.id = n.ticket_id
+     LEFT JOIN departments ticket_department ON ticket_department.id = ticket.department_id
      LEFT JOIN users actor ON actor.id = n.actor_user_id
      LEFT JOIN departments actor_department ON actor_department.id = actor.department_id
      WHERE n.user_id = ?
@@ -49,6 +53,12 @@ router.get("/", async (request, response) => {
     notifications: rows.slice(0, rawLimit).map((notification) => ({
       id: notification.id,
       ticketNo: notification.ticket_no,
+      summary: notification.summary,
+      department: notification.ticket_department,
+      source: notification.ticket_source,
+      priority: notification.priority,
+      status: notification.ticket_status,
+      actorUserId: notification.actor_user_id,
       title: notification.title === "New employee ticket"
         ? "Submitted Ticket"
         : notification.title,

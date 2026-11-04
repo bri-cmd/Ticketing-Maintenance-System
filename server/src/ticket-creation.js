@@ -18,11 +18,17 @@ async function createTicket(ticketData) {
 
     await connection.beginTransaction();
     const [numberRows] = await connection.execute(
-      `SELECT COALESCE(MAX(CAST(SUBSTRING(ticket_no, 4) AS UNSIGNED)), 0) AS last_number
+      `SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(ticket_no, '-', -1) AS UNSIGNED)), 0) AS last_number
        FROM tickets
-       WHERE ticket_no REGEXP '^IT-[0-9]+$'`,
+       WHERE ticket_no REGEXP '^(IT-)?[0-9]+$'`,
     );
-    const ticketNo = `IT-${String(Number(numberRows[0].last_number) + 1).padStart(4, "0")}`;
+    const nextNumber = Number(numberRows[0].last_number) + 1;
+    if (!Number.isSafeInteger(nextNumber) || nextNumber > 999999) {
+      const error = new Error("The six-digit ticket number limit has been reached.");
+      error.statusCode = 503;
+      throw error;
+    }
+    const ticketNo = String(nextNumber).padStart(5, "0");
     const [insertResult] = await connection.execute(
       `INSERT INTO tickets
         (ticket_no, requester_user_id, guest_name, guest_email, requester_email, department_id,

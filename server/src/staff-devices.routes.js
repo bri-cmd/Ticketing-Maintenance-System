@@ -11,7 +11,7 @@ const deviceTypes = new Set(["PC", "Printer"]);
 const deviceStatuses = new Set(["Active", "Retired"]);
 const maintenanceStatuses = new Set(["Overdue", "Due soon", "Postponed", "On schedule"]);
 const intervalUnits = { day: "DAY", week: "WEEK", month: "MONTH" };
-const ticketNumberPattern = /^IT-\d{4,}$/i;
+const ticketNumberPattern = /^(?:IT-\d{4,}|\d{5,6})$/i;
 
 router.use(requireUser, requirePasswordChangeComplete, requireRole("technician", "admin"));
 

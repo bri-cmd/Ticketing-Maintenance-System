@@ -16,6 +16,18 @@ import Modal from "./Modal.jsx";
 import { formatNotificationTime } from "./notification-time.js";
 
 const AuthContext = createContext(null);
+const POP_SOUND_STORAGE_KEY = "bmc-notification-pop-sound";
+const VOICE_STORAGE_KEY = "bmc-notification-voice";
+const NOTIFICATION_TOAST_LIFETIME = 7000;
+
+function readNotificationSetting(key) {
+  try {
+    const saved = window.localStorage.getItem(key);
+    return saved === null ? true : saved === "true";
+  } catch {
+    return true;
+  }
+}
 
 function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -226,6 +238,12 @@ function ProfileMenu() {
   const menuRef = useRef(null);
   const triggerRef = useRef(null);
   const notificationTriggerRef = useRef(null);
+  const notificationAudioContextRef = useRef(null);
+  const notificationToastsRef = useRef([]);
+  const lastNotificationIdRef = useRef(0);
+  const hasNotificationSnapshotRef = useRef(false);
+  const notificationsOpenRef = useRef(false);
+  const lastVoiceAnnouncementAtRef = useRef(0);
   const fileInputRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -237,10 +255,132 @@ function ProfileMenu() {
   const [notificationsLoading, setNotificationsLoading] = useState(true);
   const [notificationActionsOpen, setNotificationActionsOpen] = useState(false);
   const [notificationPanelPosition, setNotificationPanelPosition] = useState(null);
+  const [notificationToasts, setNotificationToasts] = useState([]);
+  const [overflowToastCount, setOverflowToastCount] = useState(0);
+  const [popSoundEnabled, setPopSoundEnabled] = useState(() => readNotificationSetting(POP_SOUND_STORAGE_KEY));
+  const [voiceEnabled, setVoiceEnabled] = useState(() => readNotificationSetting(VOICE_STORAGE_KEY));
   const [unavailableNotificationMessage, setUnavailableNotificationMessage] = useState("");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [notificationError, setNotificationError] = useState("");
+
+  const isStaff = user.role === "admin" || user.role === "technician";
+
+  function addNotificationToasts(incoming) {
+    const combined = [...notificationToastsRef.current, ...incoming]
+      .filter((notification, index, list) => (
+        list.findIndex((item) => item.id === notification.id) === index
+      ))
+      .sort((left, right) => Number(left.id) - Number(right.id));
+    const overflow = Math.max(0, combined.length - 3);
+    notificationToastsRef.current = combined.slice(-3);
+    setNotificationToasts(notificationToastsRef.current);
+    if (overflow) setOverflowToastCount((count) => count + overflow);
+  }
+
+  function removeNotificationToast(id) {
+    notificationToastsRef.current = notificationToastsRef.current.filter((item) => item.id !== id);
+    setNotificationToasts(notificationToastsRef.current);
+  }
+
+  function clearNotificationToasts() {
+    notificationToastsRef.current = [];
+    setNotificationToasts([]);
+    setOverflowToastCount(0);
+  }
+
+  function enableNotificationAudio() {
+    if (!window.AudioContext || notificationAudioContextRef.current) return;
+    if (!notificationAudioContextRef.current) {
+      try {
+        notificationAudioContextRef.current = new window.AudioContext();
+        notificationAudioContextRef.current.resume().catch(() => {});
+      } catch {
+        notificationAudioContextRef.current = null;
+      }
+    }
+  }
+
+  function playNotificationSound() {
+    const audioContext = notificationAudioContextRef.current;
+    if (!audioContext) return false;
+    try {
+      const playPop = () => {
+      const startTime = audioContext.currentTime;
+      [880, 1175].forEach((frequency, index) => {
+        const noteStart = startTime + index * 0.12;
+        const oscillator = audioContext.createOscillator();
+        const volume = audioContext.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(frequency, noteStart);
+        volume.gain.setValueAtTime(0.0001, noteStart);
+        volume.gain.exponentialRampToValueAtTime(0.15, noteStart + 0.018);
+        volume.gain.exponentialRampToValueAtTime(0.0001, noteStart + 0.11);
+        oscillator.connect(volume);
+        volume.connect(audioContext.destination);
+        oscillator.start(noteStart);
+        oscillator.stop(noteStart + 0.12);
+      });
+      };
+      if (audioContext.state === "running") {
+        playPop();
+      } else {
+        audioContext.resume().then(playPop).catch(() => {});
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function speakNotification(count, isAssigned) {
+    if (!voiceEnabled || !("speechSynthesis" in window) || !window.SpeechSynthesisUtterance) return false;
+    const now = Date.now();
+    if (now - lastVoiceAnnouncementAtRef.current < 5000) return false;
+
+    try {
+      const voices = window.speechSynthesis.getVoices();
+      if (!voices.length) return false;
+      const utterance = new window.SpeechSynthesisUtterance(
+        isAssigned
+          ? "A ticket was assigned to you."
+          : count === 1
+            ? "New ticket submitted."
+            : `${count} new tickets submitted.`,
+      );
+      utterance.lang = "en-US";
+      utterance.rate = 1;
+      utterance.volume = 0.8;
+      utterance.voice = voices.find((voice) => /^en-PH/i.test(voice.lang))
+        || voices.find((voice) => /^en-US/i.test(voice.lang))
+        || voices.find((voice) => /^en/i.test(voice.lang))
+        || null;
+      if (!utterance.voice) return false;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+      lastVoiceAnnouncementAtRef.current = now;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function alertForNotifications(newNotifications, { test = false } = {}) {
+    if (!isStaff) return;
+    const assigned = newNotifications.some((notification) => notification.title === "Ticket assigned to you");
+    const ticketCount = newNotifications.filter((notification) => (
+      notification.title === "Submitted Ticket" || notification.title === "Walk-in Ticket"
+    )).length;
+    const voiceCount = test ? 1 : ticketCount;
+    if (popSoundEnabled) playNotificationSound();
+    if (voiceEnabled && (test || assigned || voiceCount > 0)) {
+      const delay = popSoundEnabled ? 350 : 0;
+      window.setTimeout(() => {
+        const spoke = speakNotification(voiceCount, !test && assigned);
+        if (!spoke && !popSoundEnabled) playNotificationSound();
+      }, delay);
+    }
+  }
 
   const refreshNotifications = useCallback(async () => {
     setNotificationsLoading(true);
@@ -249,7 +389,25 @@ function ProfileMenu() {
       const result = await api(
         `/api/notifications?unread=${notificationTab === "unread"}&limit=${limit}&offset=0`,
       );
-      setNotifications(Array.isArray(result.notifications) ? result.notifications : []);
+      const nextNotifications = Array.isArray(result.notifications) ? result.notifications : [];
+      const newestId = nextNotifications.reduce(
+        (maximum, notification) => Math.max(maximum, Number(notification?.id) || 0),
+        lastNotificationIdRef.current,
+      );
+      const arrivingNotifications = hasNotificationSnapshotRef.current && isStaff
+        ? nextNotifications.filter((notification) => !notification?.isRead
+          && Number(notification?.id) > lastNotificationIdRef.current
+          && Number(notification?.actorUserId) !== Number(user.id))
+        : [];
+      if (arrivingNotifications.length) {
+        alertForNotifications(arrivingNotifications);
+        if (!notificationsOpenRef.current) {
+          addNotificationToasts(arrivingNotifications);
+        }
+      }
+      lastNotificationIdRef.current = newestId;
+      hasNotificationSnapshotRef.current = true;
+      setNotifications(nextNotifications);
       setUnreadCount(Number.isFinite(Number(result.unreadCount)) ? Number(result.unreadCount) : 0);
       setHasMoreNotifications(result.hasMore === true);
       setNotificationError("");
@@ -258,16 +416,70 @@ function ProfileMenu() {
     } finally {
       setNotificationsLoading(false);
     }
-  }, [notificationTab]);
+  }, [notificationTab, user.id, user.role, popSoundEnabled, voiceEnabled]);
+
+  useEffect(() => {
+    document.addEventListener("pointerdown", enableNotificationAudio);
+    document.addEventListener("keydown", enableNotificationAudio);
+    return () => {
+      document.removeEventListener("pointerdown", enableNotificationAudio);
+      document.removeEventListener("keydown", enableNotificationAudio);
+    };
+  }, []);
 
   useEffect(() => {
     if (user.mustChangePassword) return undefined;
     refreshNotifications();
-    const intervalId = window.setInterval(refreshNotifications, 30000);
+    let intervalId = window.setInterval(refreshNotifications, document.hidden ? 60000 : 10000);
+    function handleVisibilityChange() {
+      window.clearInterval(intervalId);
+      intervalId = window.setInterval(refreshNotifications, document.hidden ? 60000 : 10000);
+      if (!document.hidden) refreshNotifications();
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [user.mustChangePassword, refreshNotifications]);
+
+  useEffect(() => {
+    notificationsOpenRef.current = notificationsOpen;
+    if (notificationsOpen) {
+      clearNotificationToasts();
+    }
+  }, [notificationsOpen]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(POP_SOUND_STORAGE_KEY, String(popSoundEnabled));
+      window.localStorage.setItem(VOICE_STORAGE_KEY, String(voiceEnabled));
+    } catch {
+      // Preferences remain active for this page view if storage is unavailable.
+    }
+  }, [popSoundEnabled, voiceEnabled]);
+
+  useEffect(() => {
+    document.title = unreadCount > 0
+      ? `(${unreadCount}) BMC IT HELPDESK`
+      : "BMC IT HELPDESK";
+  }, [unreadCount]);
+
+  useEffect(() => () => {
+    document.title = "BMC IT HELPDESK";
+  }, []);
+
+  useEffect(() => {
+    if (!notificationToasts.length) return undefined;
+    function dismissNewestToast(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      const newest = notificationToastsRef.current[notificationToastsRef.current.length - 1];
+      if (newest) removeNotificationToast(newest.id);
+    }
+    document.addEventListener("keydown", dismissNewestToast);
+    return () => document.removeEventListener("keydown", dismissNewestToast);
+  }, [notificationToasts.length]);
 
   useEffect(() => {
     if (!open && !notificationsOpen) return undefined;
@@ -331,6 +543,7 @@ function ProfileMenu() {
   }
 
   async function openNotification(notification) {
+    removeNotificationToast(notification.id);
     setUnavailableNotificationMessage("");
     try {
       const notificationId = Number(notification?.id);
@@ -425,9 +638,12 @@ function ProfileMenu() {
 
   function toggleNotifications() {
     setOpen(false);
-    if (notificationsOpen) {
+    const opening = !notificationsOpen;
+    notificationsOpenRef.current = opening;
+    if (!opening) {
       setNotificationActionsOpen(false);
     } else {
+      clearNotificationToasts();
       const bounds = notificationTriggerRef.current?.getBoundingClientRect();
       if (bounds) {
         const panelWidth = Math.min(460, window.innerWidth - 24);
@@ -512,6 +728,44 @@ function ProfileMenu() {
           >
             {uploading ? "Uploading photo..." : "Change photo"}
           </button>
+          {isStaff && (
+            <div className="notification-preferences" aria-label="Notification preferences">
+              <button
+                aria-checked={popSoundEnabled}
+                className="notification-setting"
+                onClick={() => setPopSoundEnabled((enabled) => !enabled)}
+                role="switch"
+                type="button"
+              >
+                <span>Pop sound</span>
+                <span className={`notification-switch ${popSoundEnabled ? "is-on" : ""}`} aria-hidden="true">
+                  <span />
+                </span>
+              </button>
+              <button
+                aria-checked={voiceEnabled}
+                className="notification-setting"
+                onClick={() => setVoiceEnabled((enabled) => !enabled)}
+                role="switch"
+                type="button"
+              >
+                <span>Voice announcement</span>
+                <span className={`notification-switch ${voiceEnabled ? "is-on" : ""}`} aria-hidden="true">
+                  <span />
+                </span>
+              </button>
+              <button
+                className="notification-test-alert"
+                onClick={() => {
+                  enableNotificationAudio();
+                  alertForNotifications([], { test: true });
+                }}
+                type="button"
+              >
+                Test alert
+              </button>
+            </div>
+          )}
           <Link className="profile-menu-action" onClick={() => setOpen(false)} to="/change-password">
             Change password
           </Link>
@@ -544,7 +798,180 @@ function ProfileMenu() {
           />
         </ErrorBoundary>
       )}
+      {notificationToasts.length > 0 && !notificationsOpen && (
+        <div className="notification-toast-stack">
+          {notificationToasts.map((notification) => (
+            <NotificationToast
+              key={notification.id}
+              notification={notification}
+              onDismiss={() => removeNotificationToast(notification.id)}
+              onView={() => openNotification(notification)}
+            />
+          ))}
+          {overflowToastCount > 0 && (
+            <button
+              className="notification-toast-overflow"
+              onClick={toggleNotifications}
+              type="button"
+            >
+              +{overflowToastCount} more notifications
+            </button>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+function NotificationToast({ notification, onDismiss, onView }) {
+  const [paused, setPaused] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const timeoutRef = useRef(null);
+  const exitTimeoutRef = useRef(null);
+  const deadlineRef = useRef(0);
+  const remainingRef = useRef(NOTIFICATION_TOAST_LIFETIME);
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+
+  useEffect(() => {
+    if (paused || exiting) return undefined;
+    deadlineRef.current = Date.now() + remainingRef.current;
+    timeoutRef.current = window.setTimeout(
+      () => setExiting(true),
+      remainingRef.current,
+    );
+    return () => window.clearTimeout(timeoutRef.current);
+  }, [paused, exiting, notification.id]);
+
+  useEffect(() => {
+    if (!exiting) return undefined;
+    exitTimeoutRef.current = window.setTimeout(() => dismissRef.current(), 200);
+    return () => window.clearTimeout(exitTimeoutRef.current);
+  }, [exiting]);
+
+  useEffect(() => () => {
+    window.clearTimeout(timeoutRef.current);
+    window.clearTimeout(exitTimeoutRef.current);
+  }, []);
+
+  function pauseTimer() {
+    if (!paused && !exiting) {
+      window.clearTimeout(timeoutRef.current);
+      remainingRef.current = Math.max(0, deadlineRef.current - Date.now());
+      setPaused(true);
+    }
+  }
+
+  function resumeTimer() {
+    if (paused && !exiting) setPaused(false);
+  }
+
+  function openFromCard(event) {
+    if (event.target.closest("button")) return;
+    onView();
+  }
+
+  function handleCardKeyDown(event) {
+    if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    onView();
+  }
+
+  const time = formatNotificationTime(notification.createdAt);
+  const relativeTime = /^(now|in 0 seconds|0 seconds ago)$/i.test(time.relative)
+    ? "Just now"
+    : time.relative;
+  const title = notification.title || "New notification";
+  const titleClass = /assigned/i.test(title)
+    ? "is-assigned"
+    : /resolved|closed/i.test(`${title} ${notification.status || ""}`)
+      ? "is-complete"
+      : /submitted|walk-in|new ticket/i.test(title)
+        ? "is-new"
+        : "is-other";
+  const priorityClass = String(notification.priority || "Normal").toLowerCase();
+  const sourceClass = String(notification.source || "").toLowerCase().replace(/\s+/g, "-");
+
+  return (
+    <article
+      aria-label={`${title}: ${notification.ticketNo || "ticket notification"}`}
+      className={`notification-toast ${titleClass} ${exiting ? "is-exiting" : ""}`}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) resumeTimer();
+      }}
+      onFocusCapture={pauseTimer}
+      onKeyDown={handleCardKeyDown}
+      onPointerEnter={pauseTimer}
+      onPointerLeave={resumeTimer}
+      onClick={openFromCard}
+      role="status"
+      aria-live="polite"
+      tabIndex={0}
+    >
+      <header className="notification-toast-header">
+        <span className="notification-toast-avatar-wrap">
+          <Avatar className="notification-toast-avatar" user={{ avatarPath: notification.actorAvatarPath }} />
+          <NotificationActorTypeIcon actorType={notification.actorType} />
+        </span>
+        <strong className="notification-toast-title">{title}</strong>
+        <time dateTime={notification.createdAt || undefined} title={time.full || undefined}>{relativeTime}</time>
+        <button
+          aria-label="Dismiss notification"
+          className="notification-toast-close"
+          onClick={() => setExiting(true)}
+          type="button"
+        >
+          ×
+        </button>
+      </header>
+      <div className="notification-toast-content">
+        {notification.ticketNo && <span className="notification-ticket-chip">{notification.ticketNo}</span>}
+        <p className="notification-toast-summary" title={notification.summary || ""}>
+          {notification.summary || notification.message || "Ticket notification"}
+        </p>
+        <div className="notification-toast-badges">
+          {notification.department && <span className="notification-department-badge">{notification.department}</span>}
+          {notification.source && <span className={`source-badge source-${sourceClass}`}>{notification.source}</span>}
+          {notification.priority && (
+            <span className={`priority-badge priority-${priorityClass}`}>
+              {notification.priority === "Normal" ? "Medium" : notification.priority}
+            </span>
+          )}
+        </div>
+      </div>
+      <footer className="notification-toast-footer">
+        <button className="button button-primary notification-toast-view" onClick={onView} type="button">
+          View ticket
+        </button>
+        <button className="notification-toast-dismiss" onClick={() => setExiting(true)} type="button">
+          Dismiss
+        </button>
+      </footer>
+      <span
+        className="notification-toast-countdown"
+        style={{ animationPlayState: paused ? "paused" : "running", animationDuration: `${NOTIFICATION_TOAST_LIFETIME}ms` }}
+        aria-hidden="true"
+      />
+    </article>
+  );
+}
+
+function NotificationActorTypeIcon({ actorType }) {
+  const isSystem = actorType === "system";
+  return (
+    <span className={`notification-actor-type-icon ${isSystem ? "is-system" : "is-person"}`} aria-hidden="true">
+      {isSystem ? (
+        <svg viewBox="0 0 16 16" focusable="false">
+          <path d="M6.2 1.5h3.6l.4 1.7 1.4.8 1.7-.5 1.8 3.1-1.3 1.2v1.6l1.3 1.2-1.8 3.1-1.7-.5-1.4.8-.4 1.7H6.2l-.4-1.7-1.4-.8-1.7.5L.9 10.6l1.3-1.2V7.8L.9 6.6l1.8-3.1 1.7.5 1.4-.8.4-1.7Z" />
+          <circle cx="8" cy="8.5" r="2" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 16 16" focusable="false">
+          <circle cx="8" cy="5" r="2.5" />
+          <path d="M2.5 14c.4-2.7 2.2-4.1 5.5-4.1s5.1 1.4 5.5 4.1" />
+        </svg>
+      )}
+    </span>
   );
 }
 
@@ -1210,8 +1637,8 @@ function TicketSubmittedPage() {
   const employee = user?.role === "employee";
 
   return (
-    <div className="employee-shell">
-      <Header />
+    <div className="public-page">
+      <Header variant="large" />
       <main className="ticket-submitted-page">
         <div className="success-check" aria-hidden="true">✓</div>
         <h1>Request sent</h1>
@@ -1234,7 +1661,6 @@ function TicketSubmittedPage() {
 function TicketStatusForm() {
   const [searchParams] = useSearchParams();
   const [ticketNo, setTicketNo] = useState(searchParams.get("ticketNo") || "");
-  const [email, setEmail] = useState("");
   const [ticket, setTicket] = useState(null);
   const [error, setError] = useState("");
   const [searching, setSearching] = useState(false);
@@ -1247,7 +1673,7 @@ function TicketStatusForm() {
     try {
       const result = await api("/api/tickets/guest-status", {
         method: "POST",
-        body: jsonBody({ ticketNo, email }),
+        body: jsonBody({ ticketNo }),
       });
       setTicket(result.ticket);
     } catch (requestError) {
@@ -1262,10 +1688,9 @@ function TicketStatusForm() {
       <Header variant="large" />
       <main className="ticket-status-page">
         <h1>Check Ticket Status</h1>
-        <p className="muted">Enter your ticket number and the email address used to submit it.</p>
+        <p className="muted">Enter your ticket number to check its status.</p>
         <form className="ticket-status-lookup" onSubmit={checkStatus}>
           <TextField label="Ticket number" value={ticketNo} onChange={setTicketNo} maxLength={20} required />
-          <TextField label="Email address" type="email" value={email} onChange={setEmail} maxLength={254} required />
           <FormError message={error} />
           <button className="button button-primary" disabled={searching}>
             {searching ? "Checking..." : "Check status"}
@@ -1756,11 +2181,13 @@ function PublicDevicePicker({
       {error && <FormError message={error} />}
       {selectedDevice && (
         <p className="public-device-selected">
-          {[
-            selectedDevice.type,
-            [selectedDevice.brand, selectedDevice.model].filter(Boolean).join(" "),
-            selectedDevice.department,
-          ].filter(Boolean).join(" · ")}
+          <span className="public-device-selected-label">
+            {[
+              selectedDevice.type,
+              [selectedDevice.brand, selectedDevice.model].filter(Boolean).join(" "),
+              selectedDevice.department,
+            ].filter(Boolean).join(" · ")}
+          </span>
           <button
             className="text-button"
             onClick={() => chooseDevice(null)}
@@ -2255,7 +2682,7 @@ function TicketQueuePage() {
       <div className="ticket-queue-heading">
         <div>
           <h1>Ticket Queue</h1>
-          <p className="muted">Self-service and walk-in tickets in one list.</p>
+          <p className="muted">Online and walk-in tickets in one list.</p>
         </div>
         <Link className="button button-primary" to="/staff/tickets/walk-in">
           + Walk-in Ticket

@@ -13,7 +13,7 @@ const router = express.Router();
 const statuses = new Set(["Open", "In Progress", "Resolved", "Closed"]);
 const priorities = new Set(["Low", "Normal", "High", "Urgent"]);
 const sources = new Set(["Online", "Walk-in"]);
-const ticketNumberPattern = /^IT-\d{4,}$/i;
+const ticketNumberPattern = /^(?:IT-\d{4,}|\d{5,6})$/i;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 function isValidDate(value) {

@@ -219,6 +219,10 @@ Signed-in users can upload a JPG, PNG, or WebP profile photo up to 2 MB. Photos
 are stored under `server/uploads/avatars/` with generated filenames; the folder
 is excluded from Git.
 
+IT staff notification popups can play an optional voice announcement using the
+English voices installed on each PC. Browsers may delay notification alerts
+while a tab is inactive; the app checks again when the tab becomes visible.
+
 Admins can edit employee and IT account names, usernames, email addresses, and
 departments from the account pages. IT account roles can also be changed
 between **IT Staff** and **Admin**. The notification bell shows new signed-in

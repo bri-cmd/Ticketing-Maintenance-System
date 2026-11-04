@@ -6,7 +6,7 @@ const { checkPublicSubmissionLimit } = require("./public-submission-limits");
 const { requirePasswordChangeComplete, requireUser } = require("./auth");
 
 const router = express.Router();
-const validTicketNumber = /^IT-\d{4,}$/i;
+const validTicketNumber = /^(?:IT-\d{4,}|\d{5,6})$/i;
 const publicStatuses = ["Open", "In Progress", "Resolved", "Closed"];
 const helpTopics = new Set([
   "Hardware",
@@ -145,22 +145,18 @@ router.post("/guest-status", async (request, response) => {
   const ticketNo = typeof body.ticketNo === "string"
     ? body.ticketNo.trim().toUpperCase()
     : "";
-  const email = typeof body.email === "string"
-    ? body.email.trim().toLowerCase()
-    : "";
-  if (!validTicketNumber.test(ticketNo) || !validEmail.test(email) || email.length > 254) {
-    response.status(400).json({ message: "Enter a valid ticket number and email address." });
+  if (!validTicketNumber.test(ticketNo)) {
+    response.status(400).json({ message: "Enter a valid ticket number." });
     return;
   }
 
   const ticket = await getTicketForTracking(
     pool,
-    `t.ticket_no = ? AND LOWER(COALESCE(t.requester_email, t.guest_email)) = ?
-     AND t.source IN ('Online', 'Walk-in')`,
-    [ticketNo, email],
+    "t.ticket_no = ? AND t.source IN ('Online', 'Walk-in')",
+    [ticketNo],
   );
   if (!ticket) {
-    response.status(404).json({ message: "No ticket matched that number and email." });
+    response.status(404).json({ message: "No ticket matched that number." });
     return;
   }
   response.json({ ticket });
