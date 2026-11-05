@@ -63,10 +63,10 @@ function buildEmail({ type, ticket, notes = [] }) {
   const summaryHtml = escapeHtml(ticket.summary);
   const numberHtml = escapeHtml(ticket.ticketNo);
   const assignedText = ticket.assignedName
-    ? `Technician: ${ticket.assignedName}`
+    ? `IT staff: ${ticket.assignedName}`
     : "";
   const assignedHtml = ticket.assignedName
-    ? `<p><strong>Technician:</strong> ${escapeHtml(ticket.assignedName)}</p>`
+    ? `<p><strong>IT staff:</strong> ${escapeHtml(ticket.assignedName)}</p>`
     : "";
   const closureInfo = `Closed by ${ticket.closedBy || "IT Support"}.`;
   const closureText = type === "closed"

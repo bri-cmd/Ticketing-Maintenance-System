@@ -1083,11 +1083,9 @@ function NotificationPanel({
               const actorDepartment = typeof notification?.actorDepartment === "string"
                 ? notification.actorDepartment.trim()
                 : "";
-              const actorMeta = notification?.actorType === "employee"
-                  ? `Employee - ${actorName}`
-                : notification?.actorType === "system"
-                  ? "System"
-                  : [actorDepartment, actorName].filter(Boolean).join(" - ") || "System";
+              const actorMeta = notification?.actorType === "system"
+                ? "System"
+                : [actorDepartment, actorName].filter(Boolean).join(" - ") || "System";
               return (
                 <li key={notification?.id ?? `${ticketNo}-${index}`}>
                   <button
@@ -2739,7 +2737,7 @@ function TicketQueuePage() {
           <thead>
             <tr>
               <th>Ticket</th>
-              <th>Employee / Requester</th>
+              <th>Requester</th>
               <th>Department</th>
               <th>Device</th>
               <th>Priority</th>
@@ -2839,7 +2837,7 @@ function TicketHistoryPage() {
             aria-label="Search ticket history"
             maxLength={120}
             onChange={(event) => setSearchInput(event.target.value)}
-            placeholder="Search number, requester, department, device, or technician"
+            placeholder="Search number, requester, department, device, or IT staff"
             value={searchInput}
           />
           <button className="button button-secondary">Search</button>
@@ -2857,15 +2855,15 @@ function TicketHistoryPage() {
           </select>
         </label>
         <label>
-          Technician
+          IT staff
           <select
             onChange={(event) => setFilters((current) => ({ ...current, assignedTo: event.target.value }))}
             value={filters.assignedTo}
           >
-            <option value="All">All technicians</option>
+            <option value="All">All IT staff</option>
             {assignees.map((assignee) => (
               <option key={assignee.id} value={assignee.id}>
-                {assignee.fullName} ({assignee.role === "admin" ? "Admin" : "Technician"})
+                {assignee.fullName} ({assignee.role === "admin" ? "Admin" : "IT Staff"})
               </option>
             ))}
           </select>
@@ -2893,7 +2891,7 @@ function TicketHistoryPage() {
           <thead>
             <tr>
               <th>Ticket</th><th>Requester</th><th>Department</th><th>Device</th>
-              <th>Technician</th><th>Source</th><th>Status</th><th>Closed</th><th>Closed by</th>
+              <th>IT staff</th><th>Source</th><th>Status</th><th>Closed</th><th>Closed by</th>
             </tr>
           </thead>
           <tbody>
@@ -2910,7 +2908,7 @@ function TicketHistoryPage() {
                   <Link to={`/staff/tickets/${ticket.ticketNo}`}>{ticket.ticketNo}</Link>
                   <small className="ticket-subject">{ticket.summary}</small>
                 </td>
-                <td>{ticket.requesterName}<small className="ticket-subject">{ticket.requesterEmail || "No email recorded"}</small></td>
+                <td>{ticket.requesterName || "—"}</td>
                 <td>{ticket.department || "—"}</td>
                 <td>{ticket.deviceTag || ticket.deviceText || "Not registered"}</td>
                 <td>{ticket.assignedName || "Unassigned"}</td>
@@ -3081,13 +3079,24 @@ function TicketDetailPage() {
             <section className="ticket-detail-card">
               <h2>Details</h2>
               <dl className="ticket-detail-list">
-                <div><dt>Who asked</dt><dd>{ticket.requesterName} <small>({ticket.requesterType})</small><br />{ticket.requesterEmail || "No email recorded"}</dd></div>
+                <div><dt>Requester</dt><dd>{ticket.requesterName || "—"}</dd></div>
+                <div>
+                  <dt>Email</dt>
+                  <dd>
+                    {ticket.requesterEmail ? (
+                      <a
+                        className="ticket-detail-email"
+                        href={`mailto:${ticket.requesterEmail}`}
+                        title={ticket.requesterEmail}
+                      >
+                        {ticket.requesterEmail}
+                      </a>
+                    ) : "—"}
+                  </dd>
+                </div>
                 <div><dt>Department</dt><dd>{ticket.department || "—"}</dd></div>
                 <div><dt>Priority</dt><dd><span className={`priority-badge priority-${ticket.priority.toLowerCase()}`}>{ticket.priority === "Normal" ? "Medium" : ticket.priority}</span></dd></div>
                 <div><dt>Source</dt><dd><span className={`source-badge source-${ticket.source.toLowerCase().replace(/\s+/g, "-")}`}>{ticket.source}</span></dd></div>
-                {ticket.status === "Closed" && (
-                  <div><dt>Closed</dt><dd>{ticket.closedAt || "Date not recorded"}{ticket.closedBy ? ` · ${ticket.closedBy}` : ""}</dd></div>
-                )}
                 <div><dt>Help topic</dt><dd>{ticket.helpTopic}</dd></div>
                 <div>
                   <dt>Device</dt>
@@ -3129,6 +3138,9 @@ function TicketDetailPage() {
                   </dd>
                 </div>
                 <div><dt>Problem</dt><dd className="ticket-problem">{ticket.details}</dd></div>
+                {ticket.status === "Closed" && (
+                  <div><dt>Closed</dt><dd>{ticket.closedAt || "Date not recorded"}{ticket.closedBy ? ` · ${ticket.closedBy}` : ""}</dd></div>
+                )}
               </dl>
             </section>
             <section className="ticket-detail-card">
@@ -3197,7 +3209,7 @@ function TicketDetailPage() {
                     <option value="">Unassigned</option>
                     {assignees.map((assignee) => (
                       <option key={assignee.id} value={assignee.id}>
-                        {assignee.fullName} ({assignee.role === "admin" ? "Admin" : "Technician"}){user.id === assignee.id ? " (you)" : ""}
+                        {assignee.fullName} ({assignee.role === "admin" ? "Admin" : "IT Staff"}){user.id === assignee.id ? " (you)" : ""}
                       </option>
                     ))}
                   </select>
@@ -3577,15 +3589,6 @@ function DeviceEditorPage() {
               ))}
             </select>
           </label>
-          <label>
-            Assigned employee
-            <select onChange={(event) => updateForm("assignedUserId", event.target.value)} value={form.assignedUserId}>
-              <option value="">Unassigned</option>
-              {lookups.employees.map((employee) => (
-                <option key={employee.id} value={employee.id}>{employee.fullName}</option>
-              ))}
-            </select>
-          </label>
           <TextField
             label="Last serviced (optional)"
             value={form.lastServiced}
@@ -3655,7 +3658,10 @@ function DeviceDetailPage() {
           <div className="page-heading device-detail-heading">
             <div>
               <h1>{device.assetTag} {device.brand} {device.model}</h1>
-              <p className="muted">{device.department || "No department"} · {device.assignedTo ? `Assigned to ${device.assignedTo}` : "Unassigned"}</p>
+              <p className="muted">
+                {device.type} · {device.department || "No department"}
+                {device.assignedTo ? ` · Assigned to ${device.assignedTo}` : ""}
+              </p>
             </div>
             <div className="device-detail-actions">
               {device.status === "Active" && (
@@ -3693,7 +3699,7 @@ function DeviceDetailPage() {
                 <div><dt>Serial number</dt><dd>{device.serialNo || "—"}</dd></div>
                 <div><dt>Department</dt><dd>{device.department || "—"}</dd></div>
                 <div><dt>Location</dt><dd>{device.location || "—"}</dd></div>
-                <div><dt>Assigned employee</dt><dd>{device.assignedTo || "Unassigned"}</dd></div>
+                {device.assignedTo && <div><dt>Assigned employee</dt><dd>{device.assignedTo}</dd></div>}
                 <div><dt>Verification</dt><dd>{device.verification}</dd></div>
                 <div><dt>Status</dt><dd>{device.status}</dd></div>
               </dl>
@@ -4515,7 +4521,7 @@ function WalkInTicketPage() {
                 <option value="">Unassigned</option>
                 {assignees.map((assignee) => (
                   <option key={assignee.id} value={assignee.id}>
-                    {assignee.fullName} ({assignee.role === "admin" ? "Admin" : "Technician"})
+                    {assignee.fullName} ({assignee.role === "admin" ? "Admin" : "IT Staff"})
                   </option>
                 ))}
               </select>

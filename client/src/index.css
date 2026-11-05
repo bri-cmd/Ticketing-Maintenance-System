@@ -2349,6 +2349,20 @@ label small,
   font-size: 11px;
 }
 
+.ticket-detail-email {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-detail-email:hover,
+.ticket-detail-email:focus-visible {
+  color: var(--color-bmc-primary);
+}
+
 .ticket-device-subtitle {
   display: block;
   margin-top: 4px;
