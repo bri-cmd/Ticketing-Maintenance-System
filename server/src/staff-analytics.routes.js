@@ -240,6 +240,19 @@ router.get("/reports", async (request, response) => {
      ORDER BY count DESC, name`,
     ticketValues,
   );
+  const [recommendationRows] = await pool.execute(
+    `SELECT recommendation_type.name AS name, COUNT(*) AS count
+     FROM ticket_recommendations recommendation
+     JOIN recommendation_types recommendation_type ON recommendation_type.id = recommendation.type_id
+     JOIN tickets ticket ON ticket.id = recommendation.ticket_id
+     WHERE recommendation.created_at >= ?
+       AND recommendation.created_at < ?
+       AND recommendation.status <> 'Withdrawn'
+       AND (? IS NULL OR ticket.department_id = ?)
+     GROUP BY recommendation_type.id, recommendation_type.name
+     ORDER BY count DESC, recommendation_type.sort_order, recommendation_type.name`,
+    [filters.start, filters.end, filters.departmentId, filters.departmentId],
+  );
   const schedule = await getScheduleSummary(filters.departmentId);
   response.json({
     month: filters.month,
@@ -254,6 +267,10 @@ router.get("/reports", async (request, response) => {
     },
     byDepartment: departmentRows.map((row) => ({ name: row.name, count: Number(row.count) })),
     byHelpTopic: topicRows.map((row) => ({ name: row.name, count: Number(row.count) })),
+    recommendationsByType: recommendationRows.map((row) => ({
+      name: row.name,
+      count: Number(row.count),
+    })),
   });
 });
 
@@ -285,7 +302,18 @@ router.get("/reports/tickets.csv", requireRole("admin"), async (request, respons
             DATE_FORMAT(ticket.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
             DATE_FORMAT(ticket.resolved_at, '%Y-%m-%d %H:%i:%s') AS resolved_at,
             DATE_FORMAT(ticket.closed_at, '%Y-%m-%d %H:%i:%s') AS closed_at,
-            assigned.full_name AS assigned_to
+            assigned.full_name AS assigned_to,
+            COALESCE((
+              SELECT GROUP_CONCAT(
+                recommendation_type.name
+                ORDER BY recommendation_type.sort_order
+                SEPARATOR '; '
+              )
+              FROM ticket_recommendations recommendation
+              JOIN recommendation_types recommendation_type
+                ON recommendation_type.id = recommendation.type_id
+              WHERE recommendation.ticket_id = ticket.id
+            ), '') AS recommendations
      FROM tickets ticket
      LEFT JOIN users requester ON requester.id = ticket.requester_user_id
      LEFT JOIN departments department ON department.id = ticket.department_id
@@ -298,11 +326,11 @@ router.get("/reports/tickets.csv", requireRole("admin"), async (request, respons
   csvResponse(response, `tickets-${filters.month}.csv`, [
     "Ticket number", "Requester", "Email", "Department", "Device asset tag",
     "Help topic", "Subject", "Details", "Priority", "Source", "Status",
-    "Assigned to", "Submitted at", "Resolved at", "Closed at",
+    "Assigned to", "Submitted at", "Resolved at", "Closed at", "Recommendations",
   ], rows.map((row) => [
     row.ticket_no, row.requester_name, row.requester_email, row.department, row.asset_tag,
     row.help_topic, row.summary, row.details, row.priority, row.source, row.status,
-    row.assigned_to, row.created_at, row.resolved_at, row.closed_at,
+    row.assigned_to, row.created_at, row.resolved_at, row.closed_at, row.recommendations,
   ]));
 });
 

@@ -41,6 +41,7 @@ function publicTicket(ticket) {
     lastUpdate: ticket.last_update || "Your request has been submitted.",
     lastUpdateAt: ticket.last_update_at,
     messages: ticket.messages || [],
+    recommendations: ticket.recommendations || [],
     submittedAt: ticket.created_at,
   };
 }
@@ -53,15 +54,18 @@ async function getTicketForTracking(connection, condition, values) {
             (SELECT tu.note
              FROM ticket_updates tu
              WHERE tu.ticket_id = t.id AND tu.visible_to_requester = TRUE
+               AND tu.event_type IS NULL
              ORDER BY tu.created_at DESC, tu.id DESC
              LIMIT 1) AS last_update,
             (SELECT DATE_FORMAT(tu.created_at, '%Y-%m-%d %H:%i:%s')
              FROM ticket_updates tu
              WHERE tu.ticket_id = t.id AND tu.visible_to_requester = TRUE
+               AND tu.event_type IS NULL
              ORDER BY tu.created_at DESC, tu.id DESC
              LIMIT 1) AS last_update_at
      FROM tickets t
      LEFT JOIN users assigned ON assigned.id = t.assigned_to
+     LEFT JOIN users requester ON requester.id = t.requester_user_id
      WHERE ${condition}
      LIMIT 1`,
     values,
@@ -71,12 +75,30 @@ async function getTicketForTracking(connection, condition, values) {
   const [updates] = await connection.execute(
     `SELECT note, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
      FROM ticket_updates
-     WHERE ticket_id = ? AND visible_to_requester = TRUE
+     WHERE ticket_id = ? AND visible_to_requester = TRUE AND event_type IS NULL
      ORDER BY created_at, id`,
+    [rows[0].id],
+  );
+  const [recommendations] = await connection.execute(
+    `SELECT recommendation_type.name AS type, recommendation.note,
+            recommendation.status,
+            DATE_FORMAT(recommendation.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+     FROM ticket_recommendations recommendation
+     JOIN recommendation_types recommendation_type ON recommendation_type.id = recommendation.type_id
+     WHERE recommendation.ticket_id = ?
+       AND recommendation.visible_to_requester = TRUE
+       AND recommendation.status <> 'Withdrawn'
+     ORDER BY recommendation.created_at, recommendation.id`,
     [rows[0].id],
   );
   return publicTicket({
     ...rows[0],
+    recommendations: recommendations.map((recommendation) => ({
+      type: recommendation.type,
+      note: recommendation.note,
+      status: recommendation.status,
+      createdAt: recommendation.created_at,
+    })),
     messages: updates.map((update) => ({
       note: update.note,
       createdAt: update.created_at,

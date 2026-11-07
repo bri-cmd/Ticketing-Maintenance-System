@@ -1916,6 +1916,126 @@ label small,
   color: var(--color-bmc-muted);
 }
 
+.ticket-recommendations {
+  min-width: 0;
+}
+
+.recommendations-card-heading,
+.recommendation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recommendations-card-heading {
+  margin-bottom: 12px;
+}
+
+.recommendations-card-heading h2 {
+  margin: 0;
+}
+
+.recommendation-list,
+.device-recommendation-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recommendation-list > li,
+.device-recommendation-list > li {
+  min-width: 0;
+  border: 1px solid var(--color-bmc-border);
+  border-radius: 7px;
+  padding: 12px;
+}
+
+.recommendation-heading strong,
+.device-recommendation-list strong {
+  min-width: 0;
+  color: var(--color-bmc-navy);
+  font-size: 13px;
+}
+
+.recommendation-list p {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.recommendation-list small,
+.device-recommendation-list small {
+  display: block;
+  margin-top: 7px;
+  color: var(--color-bmc-muted);
+  font-size: 11px;
+}
+
+.recommendation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.recommendation-actions button {
+  font-size: 12px;
+}
+
+.recommendation-withdraw {
+  color: #a32121;
+}
+
+.public-recommendation-list {
+  margin-top: 8px;
+}
+
+.device-recommendation-list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.device-recommendation-list small,
+.device-recommendation-list a {
+  grid-column: 1 / -1;
+}
+
+.recommendation-form textarea {
+  width: 100%;
+  min-height: 96px;
+  border: 1px solid var(--color-bmc-border);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font: inherit;
+  resize: vertical;
+}
+
+.recommendation-form .field-hint {
+  justify-self: end;
+}
+
+.status-recommended {
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+
+.status-done {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-withdrawn {
+  background: #e5e7eb;
+  color: #374151;
+}
+
 .back-link {
   display: inline-block;
   margin-bottom: 18px;

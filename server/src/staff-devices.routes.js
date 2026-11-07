@@ -774,6 +774,17 @@ router.get("/:id", async (request, response) => {
      ORDER BY created_at DESC, id DESC`,
     [device.id],
   );
+  const [recommendations] = await pool.execute(
+    `SELECT recommendation.id, recommendation_type.name AS type,
+            recommendation.status, ticket.ticket_no,
+            DATE_FORMAT(recommendation.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+     FROM ticket_recommendations recommendation
+     JOIN recommendation_types recommendation_type ON recommendation_type.id = recommendation.type_id
+     JOIN tickets ticket ON ticket.id = recommendation.ticket_id
+     WHERE ticket.device_id = ?
+     ORDER BY recommendation.created_at DESC, recommendation.id DESC`,
+    [device.id],
+  );
   const [history] = await pool.execute(
     `SELECT log.id,
             DATE_FORMAT(log.done_at, '%Y-%m-%d %H:%i:%s') AS done_at,
@@ -870,6 +881,13 @@ router.get("/:id", async (request, response) => {
         summary: ticket.summary,
         status: ticket.status,
         createdAt: ticket.created_at,
+      })),
+      recommendations: recommendations.map((recommendation) => ({
+        id: recommendation.id,
+        type: recommendation.type,
+        status: recommendation.status,
+        ticketNo: recommendation.ticket_no,
+        createdAt: recommendation.created_at,
       })),
       history: combinedHistory,
     },

@@ -22,6 +22,28 @@ function isValidDate(value) {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
+function parseRecommendationInput(body, visibleDefault = true) {
+  const typeId = Number(body.typeId);
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  const visibleToRequester = typeof body.visibleToRequester === "boolean"
+    ? body.visibleToRequester
+    : visibleDefault;
+  if (!Number.isInteger(typeId) || typeId < 1) {
+    return { error: "Choose a recommendation type." };
+  }
+  if (typeof body.note !== "undefined" && body.note !== null && typeof body.note !== "string") {
+    return { error: "Enter a valid recommendation note." };
+  }
+  if (note.length > 500) {
+    return { error: "Recommendation notes must be 500 characters or fewer." };
+  }
+  if (typeof body.visibleToRequester !== "undefined"
+    && typeof body.visibleToRequester !== "boolean") {
+    return { error: "Choose whether to show this recommendation to the requester." };
+  }
+  return { value: { typeId, note, visibleToRequester } };
+}
+
 router.use(requireUser, requirePasswordChangeComplete, requireRole("technician", "admin"));
 
 router.get("/", async (request, response) => {
@@ -303,6 +325,13 @@ router.get("/lookups", async (request, response) => {
   });
 });
 
+router.get("/recommendation-types", async (_request, response) => {
+  const [types] = await pool.execute(
+    "SELECT id, name FROM recommendation_types WHERE active = TRUE ORDER BY sort_order, id",
+  );
+  response.json({ types });
+});
+
 router.get("/:ticketNo", async (request, response) => {
   const ticketNo = request.params.ticketNo.toUpperCase();
   if (!ticketNumberPattern.test(ticketNo)) {
@@ -334,13 +363,27 @@ router.get("/:ticketNo", async (request, response) => {
     return;
   }
   const [updates] = await pool.execute(
-    `SELECT tu.note, tu.old_status, tu.new_status, tu.visible_to_requester,
+    `SELECT tu.note, tu.old_status, tu.new_status, tu.visible_to_requester, tu.event_type,
             DATE_FORMAT(tu.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
             user.full_name AS author
      FROM ticket_updates tu
      LEFT JOIN users user ON user.id = tu.user_id
      WHERE tu.ticket_id = ?
      ORDER BY tu.created_at, tu.id`,
+    [rows[0].id],
+  );
+  const [recommendations] = await pool.execute(
+    `SELECT recommendation.id, recommendation.type_id, recommendation_type.name AS type,
+            recommendation.note, recommendation.visible_to_requester, recommendation.status,
+            DATE_FORMAT(recommendation.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+            DATE_FORMAT(recommendation.updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at,
+            DATE_FORMAT(recommendation.completed_at, '%Y-%m-%d %H:%i:%s') AS completed_at,
+            creator.full_name AS created_by
+     FROM ticket_recommendations recommendation
+     JOIN recommendation_types recommendation_type ON recommendation_type.id = recommendation.type_id
+     LEFT JOIN users creator ON creator.id = recommendation.created_by
+     WHERE recommendation.ticket_id = ?
+     ORDER BY recommendation.created_at, recommendation.id`,
     [rows[0].id],
   );
   const ticket = rows[0];
@@ -382,11 +425,270 @@ router.get("/:ticketNo", async (request, response) => {
         oldStatus: update.old_status,
         newStatus: update.new_status,
         visibleToRequester: Boolean(update.visible_to_requester),
+        eventType: update.event_type,
         createdAt: update.created_at,
         author: update.author || "System",
       })),
+      recommendations: recommendations.map((recommendation) => ({
+        id: recommendation.id,
+        typeId: recommendation.type_id,
+        type: recommendation.type,
+        note: recommendation.note,
+        visibleToRequester: Boolean(recommendation.visible_to_requester),
+        status: recommendation.status,
+        createdAt: recommendation.created_at,
+        updatedAt: recommendation.updated_at,
+        completedAt: recommendation.completed_at,
+        createdBy: recommendation.created_by || "IT staff",
+      })),
     },
   });
+});
+
+router.post("/:ticketNo/recommendations", async (request, response) => {
+  const ticketNo = request.params.ticketNo.toUpperCase();
+  if (!ticketNumberPattern.test(ticketNo)) {
+    response.status(400).json({ message: "Enter a valid ticket number." });
+    return;
+  }
+  const parsed = parseRecommendationInput(request.body || {});
+  if (parsed.error) {
+    response.status(400).json({ message: parsed.error });
+    return;
+  }
+
+  const connection = await pool.getConnection();
+  let ticket;
+  try {
+    await connection.beginTransaction();
+    const [tickets] = await connection.execute(
+      `SELECT ticket.id, ticket.status,
+              COALESCE(ticket.requester_email, ticket.guest_email, requester.email) AS requester_email
+       FROM tickets ticket
+       LEFT JOIN users requester ON requester.id = ticket.requester_user_id
+       WHERE ticket.ticket_no = ? FOR UPDATE`,
+      [ticketNo],
+    );
+    if (!tickets.length) {
+      await connection.rollback();
+      response.status(404).json({ message: "Ticket not found." });
+      return;
+    }
+    ticket = tickets[0];
+    if (ticket.status === "Closed") {
+      await connection.rollback();
+      response.status(409).json({ message: "Closed tickets cannot be edited. An admin must reopen the ticket first." });
+      return;
+    }
+    const [types] = await connection.execute(
+      "SELECT id, name FROM recommendation_types WHERE id = ? AND active = TRUE",
+      [parsed.value.typeId],
+    );
+    if (!types.length) {
+      await connection.rollback();
+      response.status(400).json({ message: "Choose an active recommendation type." });
+      return;
+    }
+    if (types[0].name === "Other" && !parsed.value.note) {
+      await connection.rollback();
+      response.status(400).json({ message: "Enter a note for the Other recommendation." });
+      return;
+    }
+    const [result] = await connection.execute(
+      `INSERT INTO ticket_recommendations
+        (ticket_id, type_id, note, visible_to_requester, created_by)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        ticket.id,
+        parsed.value.typeId,
+        parsed.value.note || null,
+        parsed.value.visibleToRequester,
+        request.user.id,
+      ],
+    );
+    await connection.execute(
+      `INSERT INTO ticket_updates
+        (ticket_id, user_id, note, visible_to_requester, event_type)
+       VALUES (?, ?, ?, ?, 'recommendation_added')`,
+      [
+        ticket.id,
+        request.user.id,
+        `Recommendation added: ${types[0].name}.`,
+        parsed.value.visibleToRequester,
+      ],
+    );
+    await connection.commit();
+    if (parsed.value.visibleToRequester) {
+      await queueTicketUpdate({
+        ticketId: ticket.id,
+        email: ticket.requester_email,
+        status: ticket.status,
+        statusChanged: false,
+        assignmentChanged: false,
+        recommendationChanged: true,
+      });
+    }
+    response.status(201).json({ id: result.insertId, message: "Recommendation added." });
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+});
+
+router.patch("/:ticketNo/recommendations/:recommendationId", async (request, response) => {
+  const ticketNo = request.params.ticketNo.toUpperCase();
+  const recommendationId = Number(request.params.recommendationId);
+  const body = request.body || {};
+  const action = body.action;
+  if (!ticketNumberPattern.test(ticketNo)) {
+    response.status(400).json({ message: "Enter a valid ticket number." });
+    return;
+  }
+  if (!Number.isSafeInteger(recommendationId) || recommendationId < 1) {
+    response.status(400).json({ message: "Choose a valid recommendation." });
+    return;
+  }
+  if (!["edit", "done", "withdraw"].includes(action)) {
+    response.status(400).json({ message: "Choose a valid recommendation action." });
+    return;
+  }
+  const parsed = action === "edit" ? parseRecommendationInput(body, false) : null;
+  if (parsed?.error) {
+    response.status(400).json({ message: parsed.error });
+    return;
+  }
+
+  const connection = await pool.getConnection();
+  let ticket;
+  let recommendation;
+  let shouldQueueEmail = false;
+  try {
+    await connection.beginTransaction();
+    const [tickets] = await connection.execute(
+      `SELECT ticket.id, ticket.status,
+              COALESCE(ticket.requester_email, ticket.guest_email, requester.email) AS requester_email
+       FROM tickets ticket
+       LEFT JOIN users requester ON requester.id = ticket.requester_user_id
+       WHERE ticket.ticket_no = ? FOR UPDATE`,
+      [ticketNo],
+    );
+    if (!tickets.length) {
+      await connection.rollback();
+      response.status(404).json({ message: "Ticket not found." });
+      return;
+    }
+    ticket = tickets[0];
+    if (ticket.status === "Closed") {
+      await connection.rollback();
+      response.status(409).json({ message: "Closed tickets cannot be edited. An admin must reopen the ticket first." });
+      return;
+    }
+    const [recommendations] = await connection.execute(
+      `SELECT recommendation.id, recommendation.type_id, recommendation.note,
+              recommendation.visible_to_requester, recommendation.status,
+              recommendation_type.name AS type
+       FROM ticket_recommendations recommendation
+       JOIN recommendation_types recommendation_type ON recommendation_type.id = recommendation.type_id
+       WHERE recommendation.id = ? AND recommendation.ticket_id = ?
+       FOR UPDATE`,
+      [recommendationId, ticket.id],
+    );
+    if (!recommendations.length) {
+      await connection.rollback();
+      response.status(404).json({ message: "Recommendation not found." });
+      return;
+    }
+    recommendation = recommendations[0];
+    let eventType;
+    let eventNote;
+    let visibleToRequester = Boolean(recommendation.visible_to_requester);
+    if (action === "edit") {
+      const [types] = await connection.execute(
+        "SELECT id, name FROM recommendation_types WHERE id = ? AND active = TRUE",
+        [parsed.value.typeId],
+      );
+      if (!types.length) {
+        await connection.rollback();
+        response.status(400).json({ message: "Choose an active recommendation type." });
+        return;
+      }
+      if (types[0].name === "Other" && !parsed.value.note) {
+        await connection.rollback();
+        response.status(400).json({ message: "Enter a note for the Other recommendation." });
+        return;
+      }
+      visibleToRequester = parsed.value.visibleToRequester;
+      await connection.execute(
+        `UPDATE ticket_recommendations
+         SET type_id = ?, note = ?, visible_to_requester = ?
+         WHERE id = ? AND ticket_id = ?`,
+        [
+          parsed.value.typeId,
+          parsed.value.note || null,
+          visibleToRequester,
+          recommendationId,
+          ticket.id,
+        ],
+      );
+      eventType = "recommendation_edited";
+      eventNote = `Recommendation edited: ${types[0].name}.`;
+      shouldQueueEmail = Boolean(recommendation.visible_to_requester || visibleToRequester);
+    } else if (action === "done") {
+      if (recommendation.status !== "Recommended") {
+        await connection.rollback();
+        response.status(409).json({ message: "Only active recommendations can be marked done." });
+        return;
+      }
+      await connection.execute(
+        `UPDATE ticket_recommendations
+         SET status = 'Done', completed_at = NOW()
+         WHERE id = ? AND ticket_id = ?`,
+        [recommendationId, ticket.id],
+      );
+      eventType = "recommendation_done";
+      eventNote = `Recommendation marked done: ${recommendation.type}.`;
+      shouldQueueEmail = visibleToRequester;
+    } else {
+      if (recommendation.status === "Withdrawn") {
+        await connection.rollback();
+        response.status(409).json({ message: "This recommendation is already withdrawn." });
+        return;
+      }
+      await connection.execute(
+        `UPDATE ticket_recommendations SET status = 'Withdrawn'
+         WHERE id = ? AND ticket_id = ?`,
+        [recommendationId, ticket.id],
+      );
+      eventType = "recommendation_withdrawn";
+      eventNote = `Recommendation withdrawn: ${recommendation.type}.`;
+      shouldQueueEmail = visibleToRequester;
+    }
+    await connection.execute(
+      `INSERT INTO ticket_updates
+        (ticket_id, user_id, note, visible_to_requester, event_type)
+       VALUES (?, ?, ?, ?, ?)`,
+      [ticket.id, request.user.id, eventNote, visibleToRequester, eventType],
+    );
+    await connection.commit();
+    if (shouldQueueEmail) {
+      await queueTicketUpdate({
+        ticketId: ticket.id,
+        email: ticket.requester_email,
+        status: ticket.status,
+        statusChanged: false,
+        assignmentChanged: false,
+        recommendationChanged: true,
+      });
+    }
+    response.json({ message: `Recommendation ${action === "done" ? "marked done" : action === "withdraw" ? "withdrawn" : "updated"}.` });
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 });
 
 router.patch("/:ticketNo", async (request, response) => {
@@ -557,7 +859,8 @@ router.patch("/:ticketNo", async (request, response) => {
       );
     }
     await connection.commit();
-    if (statusChanged || assignmentChanged || (note && visibleToRequester)) {
+    if ((statusChanged || assignmentChanged || (note && visibleToRequester))
+      && current.requester_email) {
       await queueTicketUpdate({
         ticketId: current.id,
         email: current.requester_email,

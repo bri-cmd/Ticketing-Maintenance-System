@@ -24,7 +24,18 @@ async function queueTicketReceived(ticket) {
 }
 
 async function queueTicketUpdate(ticket) {
-  if (!ticket.email) return;
+  const {
+    ticketId,
+    email,
+    status = "Open",
+    assignedName = null,
+    statusChanged = false,
+    assignmentChanged = false,
+    visibleNote = null,
+    closedBy = null,
+    recommendationChanged = false,
+  } = ticket;
+  if (!email) return;
   try {
     await pool.execute(
       `INSERT INTO mail_queue
@@ -35,7 +46,8 @@ async function queueTicketUpdate(ticket) {
          JSON_ARRAY(JSON_OBJECT(
            'status', ?, 'statusChanged', ?, 'assignmentChanged', ?, 'assignedName', ?,
            'visibleNote', ?, 'closedBy', ?,
-           'closedAt', IF(? = 'Closed', DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s'), NULL)
+           'closedAt', IF(? = 'Closed', DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s'), NULL),
+           'recommendationChanged', ?
          )),
          DATE_ADD(NOW(), INTERVAL 5 SECOND)
        )
@@ -53,35 +65,38 @@ async function queueTicketUpdate(ticket) {
            COALESCE(update_events, JSON_ARRAY()), '$', JSON_OBJECT(
              'status', ?, 'statusChanged', ?, 'assignmentChanged', ?, 'assignedName', ?,
              'visibleNote', ?, 'closedBy', ?,
-             'closedAt', IF(? = 'Closed', DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s'), NULL)
+             'closedAt', IF(? = 'Closed', DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s'), NULL),
+             'recommendationChanged', ?
            )
          ),
          available_at = DATE_ADD(NOW(), INTERVAL 5 SECOND),
          revision = revision + 1`,
       [
-        ticket.ticketId,
-        ticket.email,
-        ticket.status,
-        ticket.assignedName,
-        Boolean(ticket.statusChanged),
-        ticket.visibleNote || null,
-        ticket.visibleNote || null,
-        ticket.status,
-        Boolean(ticket.statusChanged),
-        Boolean(ticket.assignmentChanged),
-        ticket.assignedName,
-        ticket.visibleNote || null,
-        ticket.closedBy || null,
-        ticket.status,
-        ticket.visibleNote || null,
-        ticket.visibleNote || null,
-        ticket.status,
-        Boolean(ticket.statusChanged),
-        Boolean(ticket.assignmentChanged),
-        ticket.assignedName,
-        ticket.visibleNote || null,
-        ticket.closedBy || null,
-        ticket.status,
+        ticketId,
+        email,
+        status,
+        assignedName,
+        Boolean(statusChanged),
+        visibleNote || null,
+        visibleNote || null,
+        status,
+        Boolean(statusChanged),
+        Boolean(assignmentChanged),
+        assignedName,
+        visibleNote || null,
+        closedBy,
+        status,
+        Boolean(recommendationChanged),
+        visibleNote || null,
+        visibleNote || null,
+        status,
+        Boolean(statusChanged),
+        Boolean(assignmentChanged),
+        assignedName,
+        visibleNote || null,
+        closedBy,
+        status,
+        Boolean(recommendationChanged),
       ],
     );
   } catch (error) {
@@ -103,6 +118,7 @@ function readJsonArray(value, label) {
 
 function getUpdateDeliveries(events, queued) {
   const deliveries = [];
+  const hasStatusChange = events.some((event) => Boolean(event.statusChanged));
   let pendingNotes = [];
   let hasPendingUpdate = false;
   let latestStatus = queued.latest_status || "Open";
@@ -124,6 +140,7 @@ function getUpdateDeliveries(events, queued) {
     const status = event.status || latestStatus;
     const statusChanged = Boolean(event.statusChanged);
     const assignmentChanged = Boolean(event.assignmentChanged);
+    const recommendationChanged = Boolean(event.recommendationChanged);
     const visibleNote = typeof event.visibleNote === "string" ? event.visibleNote : "";
     latestStatus = status;
     if (assignmentChanged || event.assignedName !== undefined) {
@@ -146,7 +163,10 @@ function getUpdateDeliveries(events, queued) {
       continue;
     }
 
-    if (statusChanged || assignmentChanged || visibleNote.trim()) hasPendingUpdate = true;
+    if (statusChanged || assignmentChanged || visibleNote.trim()
+      || (recommendationChanged && !hasStatusChange)) {
+      hasPendingUpdate = true;
+    }
     if (visibleNote.trim()) pendingNotes.push(visibleNote);
   }
 
@@ -211,6 +231,22 @@ async function processReadyMail() {
           ticket: { ...baseTicket, status },
         });
       } else {
+        const [recommendationRows] = await connection.execute(
+          `SELECT recommendation_type.name AS type, recommendation.note,
+                  recommendation.status
+           FROM ticket_recommendations recommendation
+           JOIN recommendation_types recommendation_type ON recommendation_type.id = recommendation.type_id
+           WHERE recommendation.ticket_id = ?
+             AND recommendation.visible_to_requester = TRUE
+             AND recommendation.status <> 'Withdrawn'
+           ORDER BY recommendation.created_at, recommendation.id`,
+          [queued.ticket_id],
+        );
+        const recommendations = recommendationRows.map((recommendation) => ({
+          type: recommendation.type,
+          note: recommendation.note,
+          status: recommendation.status,
+        }));
         const events = readJsonArray(queued.update_events, "ticket update events");
         const deliveries = events.length
           ? getUpdateDeliveries(events, queued)
@@ -237,6 +273,7 @@ async function processReadyMail() {
               assignedName: delivery.assignedName,
               closedBy: delivery.closedBy,
               closedAt: delivery.closedAt,
+              recommendations,
             },
             notes: delivery.notes,
           });

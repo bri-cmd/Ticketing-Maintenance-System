@@ -60,6 +60,24 @@ function buildEmail({ type, ticket, notes = [] }) {
   const noteHtml = noteText.length
     ? `<section style="margin:24px 0;padding:16px;border-left:4px solid #1e40af;background:#eff6ff"><h2 style="margin:0 0 10px;font-size:16px;color:#1e3a8a">Message from IT Support</h2>${noteText.map((note) => `<p style="margin:8px 0;white-space:pre-wrap">${escapeHtml(note)}</p>`).join("")}</section>`
     : "";
+  const recommendations = Array.isArray(ticket.recommendations)
+    ? ticket.recommendations.filter((recommendation) => (
+      recommendation && typeof recommendation.type === "string"
+      && ["Recommended", "Done"].includes(recommendation.status)
+    ))
+    : [];
+  const recommendationText = recommendations.length
+    ? [
+      "IT recommendation:",
+      ...recommendations.map((recommendation) => (
+        `- ${recommendation.type}${recommendation.status ? ` (${recommendation.status})` : ""}`
+          + (recommendation.note ? `: ${recommendation.note}` : "")
+      )),
+    ]
+    : [];
+  const recommendationHtml = recommendations.length
+    ? `<section style="margin:24px 0;padding:16px;border-left:4px solid #1e40af;background:#eff6ff"><h2 style="margin:0 0 10px;font-size:16px;color:#1e3a8a">IT recommendation</h2><ul style="margin:0;padding-left:20px">${recommendations.map((recommendation) => `<li style="margin:8px 0"><strong>${escapeHtml(recommendation.type)}</strong> · ${escapeHtml(recommendation.status)}${recommendation.note ? `<br>${escapeHtml(recommendation.note)}` : ""}</li>`).join("")}</ul></section>`
+    : "";
   const summaryHtml = escapeHtml(ticket.summary);
   const numberHtml = escapeHtml(ticket.ticketNo);
   const assignedText = ticket.assignedName
@@ -107,6 +125,7 @@ function buildEmail({ type, ticket, notes = [] }) {
       "Status: Resolved",
       ...(assignedText ? [assignedText] : []),
       ...(noteText.length ? ["Message from IT Support:", ...noteText] : []),
+      ...recommendationText,
       ticketLinkText,
       "If the issue continues or returns, please contact IT Support again.",
     );
@@ -137,6 +156,7 @@ function buildEmail({ type, ticket, notes = [] }) {
       `Status: ${ticket.status}`,
       ...(assignedText ? [assignedText] : []),
       ...(noteText.length ? ["Message from IT Support:", ...noteText] : []),
+      ...recommendationText,
       ticketLinkText,
     );
   }
@@ -148,7 +168,10 @@ function buildEmail({ type, ticket, notes = [] }) {
     "",
     "BMC IT Service Desk",
   ].join("\n");
-  const html = `<!doctype html><html><body style="margin:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;color:#182744"><div style="max-width:640px;margin:24px auto;padding:0 16px"><div style="background:#182744;padding:20px 24px;border-radius:8px 8px 0 0"><div style="color:#fff;font-size:18px;font-weight:700">BMC IT Service Desk</div></div><main style="background:#fff;padding:28px 24px;border:1px solid #dce4ef;border-top:0;border-radius:0 0 8px 8px"><p>Hello${ticket.requesterName ? ` ${escapeHtml(ticket.requesterName)}` : ""},</p><h1 style="font-size:22px;margin:20px 0 12px;color:#182744">${escapeHtml(heading)}</h1><p>${escapeHtml(intro)}</p><p><strong>Ticket number:</strong> ${numberHtml}<br><strong>Source:</strong> ${escapeHtml(ticket.source)}<br><strong>Summary:</strong> ${summaryHtml}${type === "received" ? "" : `<br><strong>Status:</strong> ${escapeHtml(type === "resolved" ? "Resolved" : ticket.status)}`}</p>${closureHtml}${assignedHtml}${noteHtml}<p style="margin:24px 0"><a href="${escapedUrl}" style="display:inline-block;background:#1e40af;color:#fff;text-decoration:none;padding:11px 16px;border-radius:6px">Check ticket status</a></p>${type === "received" ? `<p style="color:#475569">${escapeHtml("If you did not submit this ticket, you can ignore this email.")}</p>` : ""}${type === "resolved" ? `<p>If the issue continues or returns, please contact IT Support again.</p>` : ""}<p style="margin-top:28px">Regards,<br>BMC IT Service Desk</p></main></div></body></html>`;
+  const includeRecommendationHtml = ["update", "message", "resolved"].includes(type)
+    ? recommendationHtml
+    : "";
+  const html = `<!doctype html><html><body style="margin:0;background:#f4f6f9;font-family:Arial,Helvetica,sans-serif;color:#182744"><div style="max-width:640px;margin:24px auto;padding:0 16px"><div style="background:#182744;padding:20px 24px;border-radius:8px 8px 0 0"><div style="color:#fff;font-size:18px;font-weight:700">BMC IT Service Desk</div></div><main style="background:#fff;padding:28px 24px;border:1px solid #dce4ef;border-top:0;border-radius:0 0 8px 8px"><p>Hello${ticket.requesterName ? ` ${escapeHtml(ticket.requesterName)}` : ""},</p><h1 style="font-size:22px;margin:20px 0 12px;color:#182744">${escapeHtml(heading)}</h1><p>${escapeHtml(intro)}</p><p><strong>Ticket number:</strong> ${numberHtml}<br><strong>Source:</strong> ${escapeHtml(ticket.source)}<br><strong>Summary:</strong> ${summaryHtml}${type === "received" ? "" : `<br><strong>Status:</strong> ${escapeHtml(type === "resolved" ? "Resolved" : ticket.status)}`}</p>${closureHtml}${assignedHtml}${noteHtml}${includeRecommendationHtml}<p style="margin:24px 0"><a href="${escapedUrl}" style="display:inline-block;background:#1e40af;color:#fff;text-decoration:none;padding:11px 16px;border-radius:6px">Check ticket status</a></p>${type === "received" ? `<p style="color:#475569">${escapeHtml("If you did not submit this ticket, you can ignore this email.")}</p>` : ""}${type === "resolved" ? `<p>If the issue continues or returns, please contact IT Support again.</p>` : ""}<p style="margin-top:28px">Regards,<br>BMC IT Service Desk</p></main></div></body></html>`;
   return { subject, text, html };
 }
 

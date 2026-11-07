@@ -1754,6 +1754,23 @@ function TicketStatusCard({ ticket }) {
           <p className="muted">There are no messages from IT yet.</p>
         )}
       </section>
+      {ticket.recommendations?.length > 0 && (
+        <section className="ticket-recommendations">
+          <h3>IT recommendation</h3>
+          <ul className="recommendation-list public-recommendation-list">
+            {ticket.recommendations.map((recommendation, index) => (
+              <li key={`${recommendation.type}-${recommendation.createdAt}-${index}`}>
+                <div className="recommendation-heading">
+                  <strong>{recommendation.type}</strong>
+                  <StatusBadge status={recommendation.status} />
+                </div>
+                {recommendation.note && <p>{recommendation.note}</p>}
+                <small>{formatDate(recommendation.createdAt)}</small>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </section>
   );
 }
@@ -2627,6 +2644,11 @@ function ReportsPage() {
               items={report.byHelpTopic}
               emptyMessage="No tickets were received in this period."
             />
+            <ReportBarList
+              title="Recommendations by type"
+              items={report.recommendationsByType}
+              emptyMessage="No recommendations were made in this period."
+            />
           </div>
         </>
       )}
@@ -2934,6 +2956,9 @@ function TicketDetailPage() {
   const { user } = useAuth();
   const [ticket, setTicket] = useState(null);
   const [assignees, setAssignees] = useState([]);
+  const [recommendationTypes, setRecommendationTypes] = useState([]);
+  const [recommendationEditor, setRecommendationEditor] = useState(null);
+  const [recommendationError, setRecommendationError] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
   const [status, setStatus] = useState("Open");
   const [note, setNote] = useState("");
@@ -2944,6 +2969,7 @@ function TicketDetailPage() {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingRecommendation, setSavingRecommendation] = useState(false);
 
   async function loadTicket() {
     const result = await api(`/api/staff/tickets/${encodeURIComponent(ticketNo)}`);
@@ -2956,6 +2982,7 @@ function TicketDetailPage() {
     Promise.all([
       loadTicket(),
       api("/api/staff/tickets/lookups").then(({ assignees: values }) => setAssignees(values)),
+      api("/api/staff/tickets/recommendation-types").then(({ types }) => setRecommendationTypes(types)),
     ])
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
@@ -3054,6 +3081,87 @@ function TicketDetailPage() {
       await loadTicket();
     } catch (requestError) {
       setError(requestError.message);
+    }
+  }
+
+  function openRecommendationEditor(recommendation = null) {
+    setRecommendationError("");
+    setRecommendationEditor(recommendation ? {
+      id: recommendation.id,
+      typeId: String(recommendation.typeId),
+      note: recommendation.note || "",
+      visibleToRequester: recommendation.visibleToRequester,
+    } : {
+      id: null,
+      typeId: "",
+      note: "",
+      visibleToRequester: true,
+    });
+  }
+
+  async function saveRecommendation(event) {
+    event.preventDefault();
+    if (!recommendationEditor) return;
+    setRecommendationError("");
+    const type = recommendationTypes.find(
+      (item) => String(item.id) === recommendationEditor.typeId,
+    );
+    if (!type) {
+      setRecommendationError("Choose a recommendation type.");
+      return;
+    }
+    if (type.name === "Other" && !recommendationEditor.note.trim()) {
+      setRecommendationError("Enter a note for the Other recommendation.");
+      return;
+    }
+    if (recommendationEditor.note.length > 500) {
+      setRecommendationError("Recommendation notes must be 500 characters or fewer.");
+      return;
+    }
+    setSavingRecommendation(true);
+    try {
+      await api(
+        recommendationEditor.id
+          ? `/api/staff/tickets/${encodeURIComponent(ticketNo)}/recommendations/${recommendationEditor.id}`
+          : `/api/staff/tickets/${encodeURIComponent(ticketNo)}/recommendations`,
+        {
+          method: recommendationEditor.id ? "PATCH" : "POST",
+          body: jsonBody({
+            ...(recommendationEditor.id ? { action: "edit" } : {}),
+            typeId: Number(recommendationEditor.typeId),
+            note: recommendationEditor.note,
+            visibleToRequester: recommendationEditor.visibleToRequester,
+          }),
+        },
+      );
+      setRecommendationEditor(null);
+      setNotice(recommendationEditor.id ? "Recommendation updated." : "Recommendation added.");
+      await loadTicket();
+    } catch (requestError) {
+      setRecommendationError(requestError.message);
+    } finally {
+      setSavingRecommendation(false);
+    }
+  }
+
+  async function updateRecommendationStatus(recommendation, action) {
+    if (action === "withdraw" && !window.confirm("Withdraw this recommendation? It will remain in the ticket history.")) {
+      return;
+    }
+    setError("");
+    setNotice("");
+    setSavingRecommendation(true);
+    try {
+      const result = await api(
+        `/api/staff/tickets/${encodeURIComponent(ticketNo)}/recommendations/${recommendation.id}`,
+        { method: "PATCH", body: jsonBody({ action }) },
+      );
+      setNotice(result.message);
+      await loadTicket();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSavingRecommendation(false);
     }
   }
 
@@ -3164,6 +3272,73 @@ function TicketDetailPage() {
                 {ticket.history.length === 0 && <li>No history recorded.</li>}
               </ol>
             </section>
+            <section className="ticket-detail-card ticket-recommendations">
+              <div className="recommendations-card-heading">
+                <h2>Recommendations</h2>
+                {ticket.status !== "Closed" && (
+                  <button
+                    className="button button-secondary"
+                    onClick={() => openRecommendationEditor()}
+                    type="button"
+                  >
+                    Add recommendation
+                  </button>
+                )}
+              </div>
+              {ticket.recommendations.length ? (
+                <ul className="recommendation-list">
+                  {ticket.recommendations.map((recommendation) => (
+                    <li key={recommendation.id}>
+                      <div className="recommendation-heading">
+                        <strong>{recommendation.type}</strong>
+                        <StatusBadge status={recommendation.status} />
+                      </div>
+                      {recommendation.note && <p>{recommendation.note}</p>}
+                      <small>
+                        {recommendation.createdBy} · {formatDate(recommendation.createdAt)}
+                        {recommendation.completedAt
+                          ? ` · Done ${formatDate(recommendation.completedAt)}`
+                          : ""}
+                        {recommendation.visibleToRequester
+                          ? " · Shown to requester"
+                          : " · Internal"}
+                      </small>
+                      {ticket.status !== "Closed" && recommendation.status !== "Withdrawn" && (
+                        <div className="recommendation-actions">
+                          <button
+                            className="text-button"
+                            onClick={() => openRecommendationEditor(recommendation)}
+                            type="button"
+                          >
+                            Edit
+                          </button>
+                          {recommendation.status === "Recommended" && (
+                            <button
+                              className="text-button"
+                              disabled={savingRecommendation}
+                              onClick={() => updateRecommendationStatus(recommendation, "done")}
+                              type="button"
+                            >
+                              Mark done
+                            </button>
+                          )}
+                          <button
+                            className="text-button recommendation-withdraw"
+                            disabled={savingRecommendation}
+                            onClick={() => updateRecommendationStatus(recommendation, "withdraw")}
+                            type="button"
+                          >
+                            Withdraw
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted">No recommendations have been added.</p>
+              )}
+            </section>
             <section className="ticket-detail-card update-ticket-card">
               {ticket.status === "Closed" ? (
                 <>
@@ -3240,6 +3415,73 @@ function TicketDetailPage() {
               )}
             </section>
           </div>
+          {recommendationEditor && (
+            <Modal
+              closeConfirmation="Discard this recommendation?"
+              isDirty
+              onClose={() => setRecommendationEditor(null)}
+              title={recommendationEditor.id ? "Edit recommendation" : "Add recommendation"}
+            >
+              <form className="recommendation-form account-modal-form" onSubmit={saveRecommendation}>
+                <label>
+                  Type
+                  <select
+                    autoComplete="off"
+                    onChange={(event) => setRecommendationEditor((current) => ({
+                      ...current,
+                      typeId: event.target.value,
+                    }))}
+                    required
+                    value={recommendationEditor.typeId}
+                  >
+                    <option value="">Choose a recommendation</option>
+                    {recommendationTypes.map((type) => (
+                      <option key={type.id} value={type.id}>{type.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Note
+                  <textarea
+                    maxLength={500}
+                    onChange={(event) => setRecommendationEditor((current) => ({
+                      ...current,
+                      note: event.target.value,
+                    }))}
+                    rows={4}
+                    value={recommendationEditor.note}
+                  />
+                </label>
+                <small className="field-hint">
+                  {recommendationEditor.note.length}/500 characters
+                </small>
+                <label className="visible-note-check">
+                  <input
+                    checked={recommendationEditor.visibleToRequester}
+                    onChange={(event) => setRecommendationEditor((current) => ({
+                      ...current,
+                      visibleToRequester: event.target.checked,
+                    }))}
+                    type="checkbox"
+                  />
+                  Show to requester
+                </label>
+                <FormError message={recommendationError} />
+                <div className="form-actions">
+                  <button
+                    className="button button-secondary"
+                    onClick={() => setRecommendationEditor(null)}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button className="button button-primary" disabled={savingRecommendation}>
+                    {savingRecommendation ? "Saving..." : "Save recommendation"}
+                  </button>
+                </div>
+              </form>
+            </Modal>
+          )}
         </>
       )}
     </StaffLayout>
@@ -3716,6 +3958,23 @@ function DeviceDetailPage() {
                 <div><dt>Next due</dt><dd>{formatMaintenanceDate(device.nextDue) || "Not scheduled"}</dd></div>
               </dl>
             </section>
+            {device.recommendations.length > 0 && (
+              <section className="ticket-detail-card">
+                <h2>Recommendations</h2>
+                <ul className="device-recommendation-list">
+                  {device.recommendations.map((recommendation) => (
+                    <li key={recommendation.id}>
+                      <strong>{recommendation.type}</strong>
+                      <StatusBadge status={recommendation.status} />
+                      <small>{formatDate(recommendation.createdAt)}</small>
+                      <Link to={`/staff/tickets/${recommendation.ticketNo}`}>
+                        {recommendation.ticketNo}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
             <section className="ticket-detail-card">
               <h2>Maintenance history</h2>
               {device.history.length ? (
